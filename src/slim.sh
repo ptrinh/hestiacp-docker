@@ -71,7 +71,7 @@ tmp_table_size                 = 16M
 max_heap_table_size            = 16M
 skip-name-resolve
 CNF
-  run service mariadb restart
+  run systemctl restart mariadb
 
   # php-fpm: ondemand + opcache, for every installed PHP version
   for pool in /etc/php/*/fpm/pool.d/www.conf; do
@@ -98,7 +98,7 @@ opcache.revalidate_freq=60
 opcache.jit=0
 INI
   done
-  for v in /etc/php/*/; do vv=$(basename "$v"); run service "php${vv}-fpm" restart; done
+  for v in /etc/php/*/; do vv=$(basename "$v"); run systemctl restart "php${vv}-fpm"; done
 
   # nginx: one worker
   for ngx in /etc/nginx/nginx.conf /usr/local/hestia/nginx/conf/nginx.conf; do
@@ -106,8 +106,8 @@ INI
     [ "$DRY" = 1 ] || sed -i 's/^worker_processes .*/worker_processes 1;/' "$ngx"
     echo "+ set worker_processes 1 in $ngx"
   done
-  run service nginx restart
-  run service hestia restart
+  run systemctl restart nginx
+  run systemctl restart hestia
 fi
 
 # ---- component removal ----------------------------------------------------

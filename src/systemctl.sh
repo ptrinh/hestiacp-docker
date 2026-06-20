@@ -1,13 +1,18 @@
 #!/bin/bash
-# systemctl shim: HestiaCP issues `systemctl ...` for service control. There is
-# no systemd in this container, so route known services to SysV `service` and
-# everything else to the docker-systemctl-replacement (systemctl3.py).
-if ( [[ -n "$2" ]] && [[ "$2" =~ (mysql|mariadb|named|bind9|exim4|dovecot|nginx|apache2|cron|clamav-daemon|clamav-freshclam|fail2ban|postgresql|hestia|^php) ]] ); then
-  arg1="$1"
-  arg2="$2"
-  [[ "$arg1" == "reload-or-restart" ]] && arg1=restart
-  [[ "$arg2" == "mysql" ]] && arg2=mariadb
-  service "$arg2" "$arg1"
-else
-  systemctl3.py "$@"
-fi
+# systemctl shim. There is no systemd in this container; route every service
+# control call to the docker-systemctl-replacement (systemctl3.py), which reads
+# the packages' real .service unit files. Routing through systemctl3.py (rather
+# than SysV `service`) avoids `service`→`systemctl`→`service` recursion for
+# packages that ship only systemd units.
+verb="$1"; shift 2>/dev/null || true
+case "$verb" in
+  reload-or-restart) verb=restart ;;   # systemctl3.py has no reload-or-restart
+  reset-failed) exit 0 ;;              # meaningless without systemd
+esac
+# normalise service name aliases HestiaCP uses
+args=()
+for a in "$@"; do
+  [ "$a" = "mysql" ] && a="mariadb"
+  args+=("$a")
+done
+exec /usr/bin/systemctl3.py "$verb" "${args[@]}"

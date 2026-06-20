@@ -19,7 +19,9 @@
 FROM debian:12-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG HESTIA_HOSTNAME=hestiacp.local
+# Must be a valid FQDN with >=2 dots — HestiaCP's installer rejects single-label
+# / single-dot names (validate_hostname per RFC1178) and aborts.
+ARG HESTIA_HOSTNAME=hestia.umbrel.local
 ARG HESTIA_EMAIL=admin@hestiacp.local
 # Build-time placeholder password; reset at first run by the Umbrel post-start hook.
 ARG HESTIA_PASSWORD=changeme
@@ -40,7 +42,7 @@ RUN printf '%s\n' \
 
 RUN apt-get update && apt-get -y upgrade \
  && apt-get install -y --no-install-recommends \
-      sudo wget curl ca-certificates git unzip lsb-release php-cli procps tini \
+      sudo wget curl ca-certificates git unzip lsb-release php-cli python3 procps tini \
  && apt-get remove -y apparmor || true \
  && apt-get clean && rm -rf /var/lib/apt/lists/* /var/log/* /tmp/*
 
@@ -57,10 +59,6 @@ RUN chmod +x /usr/bin/systemctl3.py /usr/bin/journalctl3.py /usr/bin/systemctl.s
 # --- HestiaCP install ------------------------------------------------------
 WORKDIR /usr/src
 COPY src/patch-hst-install.php /usr/src/patch-hst-install.php
-COPY src/start-all-services.sh /usr/src/start-all-services.sh
-COPY src/entrypoint.sh /usr/src/entrypoint.sh
-COPY src/slim.sh /usr/local/bin/slim.sh
-RUN chmod +x /usr/src/start-all-services.sh /usr/src/entrypoint.sh /usr/local/bin/slim.sh
 
 RUN curl -fsSL https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install-debian.sh \
       -o hst-install-debian.sh \
@@ -81,8 +79,12 @@ RUN ./hst-install-debian.sh \
       --port 8083 \
       --hostname "$HESTIA_HOSTNAME" \
       --email "$HESTIA_EMAIL" \
+      --username admin \
       --password "$HESTIA_PASSWORD" \
-      --lang en --force --interactive no \
+      --lang en --force --interactive no </dev/null \
+ # fail loudly if the installer aborted silently (e.g. bad hostname) instead of
+ # shipping an empty image
+ && test -x /usr/local/hestia/bin/v-list-users \
  # cleanup: downloaded debs, apt caches, logs (same layer so bytes don't persist)
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/* /root/*.deb /usr/src/*.deb /var/cache/apt/archives/*.deb \
@@ -92,6 +94,11 @@ RUN ./hst-install-debian.sh \
 
 # Re-assert the shim in case the installer's apt upgrades restored real systemd.
 RUN rm -f /usr/bin/systemctl && ln -s /usr/bin/systemctl.sh /usr/bin/systemctl
+
+# Runtime-only scripts last, so editing them doesn't invalidate the install layer.
+COPY src/entrypoint.sh /usr/src/entrypoint.sh
+COPY src/slim.sh /usr/local/bin/slim.sh
+RUN chmod +x /usr/src/entrypoint.sh /usr/local/bin/slim.sh
 
 EXPOSE 8083 80 443
 
