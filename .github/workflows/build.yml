@@ -1,6 +1,8 @@
 name: build
 
 # Builds a non-privileged, multi-arch HestiaCP image and pushes it to GHCR.
+# Each architecture is built on a NATIVE runner (no QEMU emulation) for speed,
+# then merged into one multi-arch manifest, then smoke-tested unprivileged.
 # The installer pulls HestiaCP's `release` branch, so each build is the latest
 # stable HestiaCP.
 
@@ -8,43 +10,106 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-  # Weekly rebuild to pick up the latest HestiaCP + base image security updates.
   schedule:
-    - cron: "0 4 * * 1"
+    - cron: "0 4 * * 1"   # weekly: latest HestiaCP + base security updates
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/hestiacp
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm   # native arm64 runner — no emulation
+            arch: arm64
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU (arm64 emulation)
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
+      - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push (amd64 + arm64)
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create multi-arch manifest
+        run: |
+          REFS=""
+          for f in /tmp/digests/*; do
+            REFS="$REFS ${IMAGE}@$(cat "$f")"
+          done
+          docker buildx imagetools create \
+            -t ${IMAGE}:latest \
+            -t ${IMAGE}:${{ github.sha }} \
+            $REFS
+          docker buildx imagetools inspect ${IMAGE}:latest
+
+  smoke-test:
+    needs: merge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run UNPRIVILEGED and verify the panel responds
+        run: |
+          set -e
+          # Note: no --privileged, no --cap-add — proves it runs with the
+          # default Docker capability set.
+          docker run -d --name hestia -p 8083:8083 ${IMAGE}:latest
+          echo "waiting for HestiaCP to boot..."
+          ok=0
+          for i in $(seq 1 60); do
+            code=$(curl -k -s -o /dev/null -w "%{http_code}" https://localhost:8083/ || echo 000)
+            echo "[$i] https://localhost:8083 -> $code"
+            if [ "$code" = "200" ] || [ "$code" = "302" ]; then ok=1; break; fi
+            sleep 5
+          done
+          echo "--- container logs (tail) ---"; docker logs --tail 40 hestia || true
+          if [ "$ok" != 1 ]; then echo "SMOKE TEST FAILED: panel never responded"; exit 1; fi
+          echo "SMOKE TEST PASSED: panel served unprivileged on 8083"

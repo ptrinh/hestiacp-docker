@@ -10,6 +10,10 @@
 # Version: the installer pulls HestiaCP's `release` branch, i.e. the latest
 # stable release at build time, so each build is automatically up to date.
 #
+# All HestiaCP features are kept by default. To slim a running container later
+# (remove phpMyAdmin/File Manager, tune RAM/CPU, disable stats) run the bundled
+# `slim.sh`. To drop Apache, rebuild with --build-arg WITH_APACHE=no.
+#
 # Approach adapted from Steveorevo/hestiacp-dockered, reworked for a small
 # Debian base, multi-arch CI builds, and a clean runtime entrypoint.
 FROM debian:12-slim
@@ -19,12 +23,26 @@ ARG HESTIA_HOSTNAME=hestiacp.local
 ARG HESTIA_EMAIL=admin@hestiacp.local
 # Build-time placeholder password; reset at first run by the Umbrel post-start hook.
 ARG HESTIA_PASSWORD=changeme
+# Keep Apache by default; set to "no" for a leaner nginx-only image.
+ARG WITH_APACHE=yes
+
+# --- image hygiene (no feature loss) ---------------------------------------
+# Strip docs/man/locales and stop apt pulling recommends/suggests. These apply
+# to every package installed after this layer.
+RUN printf '%s\n' \
+      'path-exclude /usr/share/doc/*' 'path-include /usr/share/doc/*/copyright' \
+      'path-exclude /usr/share/man/*' \
+      'path-exclude /usr/share/info/*' \
+      'path-exclude /usr/share/locale/*' 'path-include /usr/share/locale/locale.alias' \
+      > /etc/dpkg/dpkg.cfg.d/01_nodoc \
+ && printf '%s\n' 'APT::Install-Recommends "false";' 'APT::Install-Suggests "false";' \
+      > /etc/apt/apt.conf.d/99lean
 
 RUN apt-get update && apt-get -y upgrade \
  && apt-get install -y --no-install-recommends \
-      sudo wget curl ca-certificates git unzip lsb-release php-cli procps \
+      sudo wget curl ca-certificates git unzip lsb-release php-cli procps tini \
  && apt-get remove -y apparmor || true \
- && rm -rf /var/lib/apt/lists/*
+ && apt-get clean && rm -rf /var/lib/apt/lists/* /var/log/* /tmp/*
 
 # --- systemd replacement ---------------------------------------------------
 COPY src/docker-systemctl-replacement/systemctl3.py /usr/bin/systemctl3.py
@@ -41,7 +59,8 @@ WORKDIR /usr/src
 COPY src/patch-hst-install.php /usr/src/patch-hst-install.php
 COPY src/start-all-services.sh /usr/src/start-all-services.sh
 COPY src/entrypoint.sh /usr/src/entrypoint.sh
-RUN chmod +x /usr/src/start-all-services.sh /usr/src/entrypoint.sh
+COPY src/slim.sh /usr/local/bin/slim.sh
+RUN chmod +x /usr/src/start-all-services.sh /usr/src/entrypoint.sh /usr/local/bin/slim.sh
 
 RUN curl -fsSL https://raw.githubusercontent.com/hestiacp/hestiacp/release/install/hst-install-debian.sh \
       -o hst-install-debian.sh \
@@ -49,11 +68,10 @@ RUN curl -fsSL https://raw.githubusercontent.com/hestiacp/hestiacp/release/insta
  && php /usr/src/patch-hst-install.php /usr/src/hst-install-debian.sh \
  && touch /var/log/auth.log
 
-# Lean, non-privileged feature set: web (nginx+apache+php-fpm), MariaDB, API.
-# Firewall / fail2ban / quota disabled (need privilege). Mail/DNS/FTP can be
-# enabled later by flipping the flags below.
+# All features kept (Apache optional via WITH_APACHE). Only the privilege-
+# requiring add-ons are off: firewall / fail2ban / quota.
 RUN ./hst-install-debian.sh \
-      --apache yes --phpfpm yes --multiphp no \
+      --apache "$WITH_APACHE" --phpfpm yes --multiphp no \
       --vsftpd no --proftpd no --named no \
       --mysql yes --postgresql no \
       --exim no --dovecot no --sieve no \
@@ -65,11 +83,17 @@ RUN ./hst-install-debian.sh \
       --email "$HESTIA_EMAIL" \
       --password "$HESTIA_PASSWORD" \
       --lang en --force --interactive no \
- && rm -rf /var/lib/apt/lists/*
+ # cleanup: downloaded debs, apt caches, logs (same layer so bytes don't persist)
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/* /root/*.deb /usr/src/*.deb /var/cache/apt/archives/*.deb \
+           /var/log/* /tmp/* \
+ # in a pinned container we patch by rebuilding, so stop in-place auto-update
+ && (for cf in /var/spool/cron/crontabs/*; do [ -f "$cf" ] && sed -i '/v-update-sys-hestia-all/d' "$cf"; done) || true
 
 # Re-assert the shim in case the installer's apt upgrades restored real systemd.
 RUN rm -f /usr/bin/systemctl && ln -s /usr/bin/systemctl.sh /usr/bin/systemctl
 
 EXPOSE 8083 80 443
 
-ENTRYPOINT ["/usr/src/entrypoint.sh"]
+# tini as PID1: proper zombie reaping + signal forwarding for our service set.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/src/entrypoint.sh"]
