@@ -31,6 +31,31 @@ seed /home                  /opt/seed/home
 mkdir -p /backup
 chown -R mysql:mysql /var/lib/mysql 2>/dev/null || true
 
+# --- optional SSH (opt-in, OFF by default) ---------------------------------
+# Started before the (slower) service stack so it's reachable quickly. Enabled
+# when ENABLE_SSH=true or SSH_AUTHORIZED_KEYS is provided. Key-only (no
+# password). Publish a host port for container :22, e.g. `-p 2222:22`. For
+# routine admin prefer `docker exec` instead.
+if [ "${ENABLE_SSH:-false}" = "true" ] || [ -n "${SSH_AUTHORIZED_KEYS:-}" ]; then
+  echo "[entrypoint] enabling sshd (key-only)"
+  mkdir -p /root/.ssh /run/sshd
+  chmod 700 /root/.ssh
+  if [ -n "${SSH_AUTHORIZED_KEYS:-}" ]; then
+    printf '%s\n' "$SSH_AUTHORIZED_KEYS" >> /root/.ssh/authorized_keys   # one key, or several newline-separated
+  fi
+  if [ -s /root/.ssh/authorized_keys ]; then   # a mounted authorized_keys is also honoured
+    sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
+  else
+    echo "[entrypoint] WARN: SSH enabled but no authorized key provided — no one can log in"
+  fi
+  mkdir -p /etc/ssh/sshd_config.d
+  printf 'PasswordAuthentication no\nPermitRootLogin prohibit-password\n' \
+    > /etc/ssh/sshd_config.d/99-hestia.conf
+  ssh-keygen -A >/dev/null 2>&1 || true   # host keys (regenerated each start unless /etc/ssh is persisted)
+  /usr/sbin/sshd && echo "[entrypoint] sshd listening on :22" || echo "[entrypoint] WARN: sshd failed to start"
+fi
+
 # Detect the installed PHP-FPM unit (version-agnostic, e.g. php8.3-fpm).
 PHPFPM="$(ls /lib/systemd/system/ 2>/dev/null | grep -oE 'php[0-9.]+-fpm\.service' | head -1 | sed 's/\.service$//')"
 

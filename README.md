@@ -43,6 +43,31 @@ Just managing the panel? `-p 8083:8083` is enough. Hosting real sites? Add
 > Umbrel app publishes hosted sites on **alternate** host ports (e.g.
 > `9088:80`, `9448:443`) — see [ptrinh/umbrel-hestiacp](https://github.com/ptrinh/umbrel-hestiacp).
 
+### SSH access (optional, off by default)
+
+For routine admin, prefer `docker exec -it hestiacp bash` (no open port). For
+hosting users' SSH/SFTP, add their keys **in the HestiaCP panel**
+(`v-add-user-ssh-key`) — there's also a built-in web terminal.
+
+If you specifically want to SSH into the container (e.g. scp / git-over-ssh),
+enable a **key-only** sshd by setting `ENABLE_SSH=true` and providing a public
+key, then publish a port:
+
+```bash
+docker run -d --name hestia \
+  -p 8083:8083 -p 80:80 -p 443:443 \
+  -p 2222:22 \
+  -e ENABLE_SSH=true \
+  -e SSH_AUTHORIZED_KEYS="ssh-ed25519 AAAA... you@host" \
+  ghcr.io/ptrinh/hestiacp:latest
+# ssh -p 2222 root@<host>
+```
+
+`SSH_AUTHORIZED_KEYS` accepts one key or several newline-separated; a mounted
+`/root/.ssh/authorized_keys` is also honoured. Password auth is disabled
+(key-only). Host keys regenerate each start unless you persist `/etc/ssh`. This
+is **disabled in the Umbrel app** (the store expects web-UI-only access).
+
 ### Docker Compose
 
 A ready-to-use [`docker-compose.example.yml`](docker-compose.example.yml) is

@@ -108,7 +108,7 @@ COPY src/entrypoint.sh /usr/src/entrypoint.sh
 COPY src/slim.sh /usr/local/bin/slim.sh
 RUN chmod +x /usr/src/entrypoint.sh /usr/local/bin/slim.sh
 
-EXPOSE 8083 80 443
+EXPOSE 8083 80 443 22
 
 # tini as PID1: proper zombie reaping + signal forwarding for our service set.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/src/entrypoint.sh"]

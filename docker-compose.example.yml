@@ -13,10 +13,15 @@ services:
     restart: unless-stopped
     environment:
       - TZ=UTC
+      # Optional, OFF by default. Uncomment for key-only SSH into the container
+      # (prefer `docker exec` for admin; HestiaCP manages per-user keys itself):
+      # - ENABLE_SSH=true
+      # - SSH_AUTHORIZED_KEYS=ssh-ed25519 AAAA... you@host
     ports:
       - "8083:8083"    # control panel UI (always)
       - "80:80"        # hosted websites — HTTP   (drop if you only use the panel)
       - "443:443"      # hosted websites — HTTPS  (drop if you only use the panel)
+      # - "2222:22"    # SSH (only if ENABLE_SSH=true above)
       # Mail / DNS / FTP — uncomment only if you enable those services:
       # - "25:25"
       # - "587:587"
