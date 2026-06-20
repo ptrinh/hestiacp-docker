@@ -12,6 +12,25 @@ if [ ! -L /usr/bin/systemctl ]; then
 fi
 touch /var/log/auth.log 2>/dev/null || true
 
+# --- seed persisted data on first run --------------------------------------
+# These paths are bind-mounted from the host (${APP_DATA_DIR}) and start empty.
+# Copy the image's installed defaults in once so MariaDB/HestiaCP have their
+# initial state; on later starts the dirs are already populated and we skip.
+seed() {
+  local target="$1" src="$2"
+  if [ -d "$src" ] && [ -z "$(ls -A "$target" 2>/dev/null)" ]; then
+    echo "[entrypoint] seeding $target from image defaults"
+    mkdir -p "$target"
+    cp -a "$src/." "$target/" 2>/dev/null || true
+  fi
+}
+seed /var/lib/mysql         /opt/seed/mysql
+seed /usr/local/hestia/data /opt/seed/hestia-data
+seed /usr/local/hestia/conf /opt/seed/hestia-conf
+seed /home                  /opt/seed/home
+mkdir -p /backup
+chown -R mysql:mysql /var/lib/mysql 2>/dev/null || true
+
 # Detect the installed PHP-FPM unit (version-agnostic, e.g. php8.3-fpm).
 PHPFPM="$(ls /lib/systemd/system/ 2>/dev/null | grep -oE 'php[0-9.]+-fpm\.service' | head -1 | sed 's/\.service$//')"
 

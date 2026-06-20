@@ -95,6 +95,14 @@ RUN ./hst-install-debian.sh \
 # Re-assert the shim in case the installer's apt upgrades restored real systemd.
 RUN rm -f /usr/bin/systemctl && ln -s /usr/bin/systemctl.sh /usr/bin/systemctl
 
+# Snapshot the installed defaults so the entrypoint can seed empty bind-mounted
+# data volumes on first run (data then persists under the host's ${APP_DATA_DIR}).
+RUN mkdir -p /opt/seed \
+ && cp -a /var/lib/mysql          /opt/seed/mysql \
+ && cp -a /usr/local/hestia/data  /opt/seed/hestia-data \
+ && cp -a /usr/local/hestia/conf  /opt/seed/hestia-conf \
+ && cp -a /home                   /opt/seed/home
+
 # Runtime-only scripts last, so editing them doesn't invalidate the install layer.
 COPY src/entrypoint.sh /usr/src/entrypoint.sh
 COPY src/slim.sh /usr/local/bin/slim.sh
