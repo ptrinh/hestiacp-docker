@@ -18,11 +18,30 @@ Most HestiaCP Docker images run real **systemd** as PID 1 and require
 ## Quick start
 
 ```bash
-# No --privileged, no special caps needed:
-docker run -d --name hestia -p 8083:8083 ghcr.io/ptrinh/hestiacp:latest
+# No --privileged, no special caps needed.
+# 8083 = control panel UI; 80/443 = the websites HestiaCP hosts.
+docker run -d --name hestia \
+  -p 8083:8083 \
+  -p 80:80 -p 443:443 \
+  ghcr.io/ptrinh/hestiacp:latest
 ```
 
 Open `https://localhost:8083` (self-signed cert → accept the warning).
+
+### Ports
+
+| Port | Purpose | Publish it when |
+|---|---|---|
+| `8083` | HestiaCP control panel (admin UI) | Always — it's how you manage the server |
+| `80` / `443` | HTTP/HTTPS for the **websites** HestiaCP hosts | You actually host sites and want visitors to reach them |
+| `25`, `587`, `465`, `993`, `53`, `21`, … | Mail / DNS / FTP | Only if you enable those services (off by default) |
+
+Just managing the panel? `-p 8083:8083` is enough. Hosting real sites? Add
+`-p 80:80 -p 443:443`.
+
+> **On Umbrel**, ports 80/443 are already used by umbrelOS itself, so the
+> Umbrel app publishes hosted sites on **alternate** host ports (e.g.
+> `9088:80`, `9448:443`) — see [ptrinh/umbrel-hestiacp](https://github.com/ptrinh/umbrel-hestiacp).
 Default admin password is the build placeholder; set your own:
 
 ```bash
