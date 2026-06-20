@@ -42,6 +42,15 @@ Just managing the panel? `-p 8083:8083` is enough. Hosting real sites? Add
 > **On Umbrel**, ports 80/443 are already used by umbrelOS itself, so the
 > Umbrel app publishes hosted sites on **alternate** host ports (e.g.
 > `9088:80`, `9448:443`) — see [ptrinh/umbrel-hestiacp](https://github.com/ptrinh/umbrel-hestiacp).
+
+### Docker Compose
+
+A ready-to-use [`docker-compose.example.yml`](docker-compose.example.yml) is
+included (persists data in `./data/*`, no privileged mode):
+
+```bash
+docker compose -f docker-compose.example.yml up -d
+```
 Default admin password is the build placeholder; set your own:
 
 ```bash

@@ -1,0 +1,45 @@
+# Sample Docker Compose for the non-privileged HestiaCP image.
+#
+#   docker compose -f docker-compose.example.yml up -d
+#   # then open https://<host>:8083  (self-signed cert — accept the warning)
+#
+# No privileged mode and no extra capabilities are required.
+# Data persists in ./data/* on the host (the image seeds these on first run).
+
+services:
+  hestia:
+    image: ghcr.io/ptrinh/hestiacp:latest
+    container_name: hestiacp
+    restart: unless-stopped
+    environment:
+      - TZ=UTC
+    ports:
+      - "8083:8083"    # control panel UI (always)
+      - "80:80"        # hosted websites — HTTP   (drop if you only use the panel)
+      - "443:443"      # hosted websites — HTTPS  (drop if you only use the panel)
+      # Mail / DNS / FTP — uncomment only if you enable those services:
+      # - "25:25"
+      # - "587:587"
+      # - "465:465"
+      # - "993:993"
+      # - "53:53/tcp"
+      # - "53:53/udp"
+      # - "21:21"
+    volumes:
+      - ./data/mysql:/var/lib/mysql              # MariaDB databases
+      - ./data/hestia:/usr/local/hestia/data     # HestiaCP users / packages
+      - ./data/hestia-conf:/usr/local/hestia/conf
+      - ./data/home:/home                        # user sites / mail
+      - ./data/backup:/backup
+    healthcheck:
+      test: ["CMD-SHELL", "curl -k -sf https://localhost:8083/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 5m
+
+# First login: user "admin" with the image's build-time placeholder password.
+# Change it immediately:
+#   docker exec hestiacp /usr/local/hestia/bin/v-change-user-password admin 'YOUR_PASSWORD'
+#
+# Slim it down later (optional): docker exec -it hestiacp slim.sh --all
