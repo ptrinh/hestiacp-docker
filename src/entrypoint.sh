@@ -69,6 +69,28 @@ for svc in mariadb ${PHPFPM:-} nginx apache2 hestia; do
   fi
 done
 
+# --- regenerate /etc configs from persisted Hestia data --------------------
+# /etc is NOT a persisted volume (only Hestia data/conf, /home and mysql are).
+# The actual nginx/apache vhosts and php-fpm pool configs live under /etc and
+# are generated *from* that persisted data. So on every container (re)create the
+# /etc tree is the bare image layer with no user-domain configs — hosted sites
+# would 503 (missing vhost AND missing php-fpm pool socket) until rebuilt.
+# Rebuild every user's configs from the persisted data, then reload the web
+# stack once. This is also what guarantees each domain's php-fpm pool socket
+# exists (otherwise php-fpm, started above before these pools are written, never
+# creates them).
+HEBIN=/usr/local/hestia/bin
+if [ -d /usr/local/hestia/data/users ]; then
+  for u in $(ls /usr/local/hestia/data/users 2>/dev/null); do
+    echo "[entrypoint] rebuilding Hestia configs for: $u"
+    "$HEBIN/v-rebuild-user" "$u" no >/dev/null 2>&1 \
+      || echo "[entrypoint] WARN: rebuild failed for $u"
+  done
+  for s in ${PHPFPM:-} nginx apache2; do
+    [ -n "$s" ] && "$HEBIN/v-restart-service" "$s" >/dev/null 2>&1 || true
+  done
+fi
+
 # Quick readiness check on the panel.
 for _ in $(seq 1 30); do
   code="$(curl -k -s -o /dev/null -w '%{http_code}' https://localhost:8083/ 2>/dev/null || echo 000)"
