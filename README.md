@@ -105,6 +105,14 @@ them need privilege).
   `cap_add: [NET_ADMIN]` (Umbrel permits declared capabilities).
 - HestiaCP does **not** officially support Docker. Version bumps can need image
   fixes; in-place self-update is disabled (see "Updating").
+- **`/etc` is not persisted** (only Hestia data/conf, `/home` and MariaDB are).
+  The generated nginx/apache vhosts and php-fpm pools live under `/etc`, so the
+  entrypoint **rebuilds them from the persisted Hestia data on every start**
+  (`v-rebuild-user`). One consequence: the image ships a **single PHP version**
+  (`--multiphp no`), so persisted data whose web domains reference a *different*
+  PHP backend (e.g. migrated from another host running PHP 8.1 while this image
+  ships 8.3) will fail to get a matching php-fpm pool and 503. Match the image's
+  PHP version to your data, or rebuild the image with `--multiphp yes`.
 
 ## Version & updates
 
