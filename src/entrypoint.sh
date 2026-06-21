@@ -69,6 +69,48 @@ for svc in mariadb ${PHPFPM:-} nginx apache2 hestia; do
   fi
 done
 
+HEBIN=/usr/local/hestia/bin
+
+# Wait for the web stack to actually be listening before running HestiaCP
+# config commands — they restart nginx/apache and fail if those aren't ready.
+echo "[entrypoint] waiting for web stack..."
+for _ in $(seq 1 60); do
+  curl -k -s -o /dev/null https://localhost:8083/ 2>/dev/null \
+    && (exec 3<>/dev/tcp/127.0.0.1/80) 2>/dev/null && break
+  sleep 2
+done
+
+# --- ensure web-stack runtime dirs ----------------------------------------
+# /var/log is an ephemeral image layer (our build cleans it) and HestiaCP needs
+# these to exist before it can register an IP or add a web domain.
+mkdir -p /etc/apache2/conf.d/domains /etc/nginx/conf.d/domains \
+         /var/log/apache2/domains /var/log/nginx/domains
+
+# --- register the container's current IP with HestiaCP ---------------------
+# HestiaCP binds web vhosts to a system IP, and a container's IP can change
+# across recreates. Register the current IP (so domains can be created at all),
+# and if it changed, repoint existing domains and drop the stale IP.
+CUR_IP="$(hostname -i 2>/dev/null | awk '{print $1}')"
+if [ -n "$CUR_IP" ] && [ -d /usr/local/hestia/data ]; then
+  mkdir -p /usr/local/hestia/data/ips
+  OLD_IP="$(ls /usr/local/hestia/data/ips/ 2>/dev/null | grep -vx "$CUR_IP" | head -1)"
+  for _ in 1 2 3 4 5; do
+    [ -e "/usr/local/hestia/data/ips/$CUR_IP" ] && break
+    "$HEBIN/v-add-sys-ip" "$CUR_IP" 255.255.0.0 eth0 admin >/dev/null 2>&1
+    [ -e "/usr/local/hestia/data/ips/$CUR_IP" ] && { echo "[entrypoint] registered system IP $CUR_IP"; break; }
+    sleep 3
+  done
+  if [ -n "$OLD_IP" ] && [ "$OLD_IP" != "$CUR_IP" ]; then
+    echo "[entrypoint] IP changed ($OLD_IP -> $CUR_IP); repointing web domains"
+    for u in $(ls /usr/local/hestia/data/users 2>/dev/null); do
+      for d in $("$HEBIN/v-list-web-domains" "$u" plain 2>/dev/null | awk '{print $1}'); do
+        "$HEBIN/v-change-web-domain-ip" "$u" "$d" "$CUR_IP" >/dev/null 2>&1
+      done
+    done
+    "$HEBIN/v-delete-sys-ip" "$OLD_IP" >/dev/null 2>&1
+  fi
+fi
+
 # --- regenerate /etc configs from persisted Hestia data --------------------
 # /etc is NOT a persisted volume (only Hestia data/conf, /home and mysql are).
 # The actual nginx/apache vhosts and php-fpm pool configs live under /etc and
@@ -79,7 +121,6 @@ done
 # stack once. This is also what guarantees each domain's php-fpm pool socket
 # exists (otherwise php-fpm, started above before these pools are written, never
 # creates them).
-HEBIN=/usr/local/hestia/bin
 if [ -d /usr/local/hestia/data/users ]; then
   for u in $(ls /usr/local/hestia/data/users 2>/dev/null); do
     echo "[entrypoint] rebuilding Hestia configs for: $u"

@@ -114,6 +114,24 @@ them need privilege).
   ships 8.3) will fail to get a matching php-fpm pool and 503. Match the image's
   PHP version to your data, or rebuild the image with `--multiphp yes`.
 
+## Web hosting status (experimental)
+
+The **control panel** and config management are solid. Actually **serving hosted
+websites** from this container is **experimental**:
+
+- ✅ Sites you create **persist** and are rebuilt from the persisted data on
+  every start (`v-rebuild-user`) — served correctly in testing across container
+  recreation, including a changed container IP (auto-repointed on start).
+- ⚠️ **Live** domain changes (adding a domain on a running container) can be
+  unreliable: HestiaCP restarts the web/PHP services on every change, and those
+  restarts assume systemd. Without it, a restart can fail mid-operation and drop
+  nginx/php-fpm until the next container start re-runs the rebuild.
+
+The container auto-registers its current IP and creates the web-stack runtime
+dirs on start, so domains can be created — but for **production hosting**, run
+HestiaCP on a real VM. Making in-container live hosting fully reliable needs
+proper service supervision (e.g. s6-overlay) and is tracked separately.
+
 ## Version & updates
 
 The installer pulls HestiaCP's `release` branch, so **every build is the latest
