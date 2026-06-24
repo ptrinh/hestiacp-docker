@@ -1,7 +1,7 @@
 # Sample Docker Compose for the non-privileged HestiaCP image.
 #
 #   docker compose -f docker-compose.example.yml up -d
-#   # then open https://<host>:8083  (self-signed cert — accept the warning)
+#   # then open https://<host>:8083  (self-signed cert  -  accept the warning)
 #
 # No privileged mode and no extra capabilities are required.
 # Data persists in ./data/* on the host (the image seeds these on first run).
@@ -19,10 +19,10 @@ services:
       # - SSH_AUTHORIZED_KEYS=ssh-ed25519 AAAA... you@host
     ports:
       - "8083:8083"    # control panel UI (always)
-      - "80:80"        # hosted websites — HTTP   (drop if you only use the panel)
-      - "443:443"      # hosted websites — HTTPS  (drop if you only use the panel)
+      - "80:80"        # hosted websites  -  HTTP   (drop if you only use the panel)
+      - "443:443"      # hosted websites  -  HTTPS  (drop if you only use the panel)
       # - "2222:22"    # SSH (only if ENABLE_SSH=true above)
-      # Mail / DNS / FTP — uncomment only if you enable those services:
+      # Mail / DNS / FTP  -  uncomment only if you enable those services:
       # - "25:25"
       # - "587:587"
       # - "465:465"

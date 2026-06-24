@@ -4,7 +4,7 @@
 # real .service unit files.
 #
 # Notable: systemctl3.py's `restart` is unreliable for some units (apache2 ends
-# up dead), but `start`/`stop` work — so we implement every restart/reload verb
+# up dead), but `start`/`stop` work  -  so we implement every restart/reload verb
 # as an explicit stop + start. This is what makes HestiaCP's per-change web
 # restarts (v-restart-service) succeed.
 verb="$1"; shift 2>/dev/null || true
@@ -21,7 +21,16 @@ case "$verb" in
     exit 0 ;;                         # meaningless without systemd
   restart|reload|reload-or-restart|try-restart|force-reload)
     /usr/bin/systemctl3.py stop "${args[@]}" >/dev/null 2>&1
-    exec /usr/bin/systemctl3.py start "${args[@]}" ;;
+    /usr/bin/systemctl3.py start "${args[@]}"
+    rc=$?
+    # Wait until the service is actually up before returning, so a caller's
+    # follow-up `is-active` check (e.g. HestiaCP's v-restart-service) doesn't
+    # race and report a false "restart failed".
+    for _ in 1 2 3 4 5 6 7 8; do
+      /usr/bin/systemctl3.py is-active "${args[@]}" >/dev/null 2>&1 && break
+      sleep 1
+    done
+    exit $rc ;;
 esac
 
 exec /usr/bin/systemctl3.py "$verb" "${args[@]}"

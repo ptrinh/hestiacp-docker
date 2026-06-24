@@ -6,27 +6,30 @@
 # fail2ban and disk-quota features disabled (the parts that need NET_ADMIN /
 # kernel quota). The result runs with NO extra capabilities and NO privilege.
 #
-# Base: debian:12-slim (bookworm) — small, and a HestiaCP-supported OS.
+# Base: debian:12-slim (bookworm)  -  small, and a HestiaCP-supported OS.
 # Version: the installer pulls HestiaCP's `release` branch, i.e. the latest
 # stable release at build time, so each build is automatically up to date.
 #
-# All HestiaCP features are kept by default. To slim a running container later
-# (remove phpMyAdmin/File Manager, tune RAM/CPU, disable stats) run the bundled
-# `slim.sh`. To drop Apache, rebuild with --build-arg WITH_APACHE=no.
+# nginx-only by default (Apache opt-in via WITH_APACHE=yes). To slim a running
+# container later (remove phpMyAdmin/File Manager, tune RAM/CPU, disable stats)
+# run the bundled `slim.sh`.
 #
 # Approach adapted from Steveorevo/hestiacp-dockered, reworked for a small
 # Debian base, multi-arch CI builds, and a clean runtime entrypoint.
 FROM debian:12-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
-# Must be a valid FQDN with >=2 dots — HestiaCP's installer rejects single-label
+# Must be a valid FQDN with >=2 dots  -  HestiaCP's installer rejects single-label
 # / single-dot names (validate_hostname per RFC1178) and aborts.
 ARG HESTIA_HOSTNAME=hestia.umbrel.local
 ARG HESTIA_EMAIL=admin@hestiacp.local
-# Build-time placeholder password; reset at first run by the Umbrel post-start hook.
+# Build-time placeholder password; reset at first run from APP_PASSWORD by the entrypoint.
 ARG HESTIA_PASSWORD=changeme
-# Keep Apache by default; set to "no" for a leaner nginx-only image.
-ARG WITH_APACHE=yes
+# nginx-only by default: in a container, HestiaCP's live web restarts are only
+# reliable without the Apache backend (Apache's restart fails and leaves the
+# hosted site down). Set to "yes" to include Apache (gives .htaccess support,
+# but live domain changes then need an app restart to take effect).
+ARG WITH_APACHE=no
 
 # --- image hygiene (no feature loss) ---------------------------------------
 # Strip docs/man/locales and stop apt pulling recommends/suggests. These apply
@@ -66,8 +69,8 @@ RUN curl -fsSL https://raw.githubusercontent.com/hestiacp/hestiacp/release/insta
  && php /usr/src/patch-hst-install.php /usr/src/hst-install-debian.sh \
  && touch /var/log/auth.log
 
-# All features kept (Apache optional via WITH_APACHE). Only the privilege-
-# requiring add-ons are off: firewall / fail2ban / quota.
+# nginx + php-fpm + MariaDB + API. Apache optional via WITH_APACHE. The
+# privilege-requiring add-ons are off: firewall / fail2ban / quota.
 RUN ./hst-install-debian.sh \
       --apache "$WITH_APACHE" --phpfpm yes --multiphp no \
       --vsftpd no --proftpd no --named no \
@@ -94,6 +97,14 @@ RUN ./hst-install-debian.sh \
 
 # Re-assert the shim in case the installer's apt upgrades restored real systemd.
 RUN rm -f /usr/bin/systemctl && ln -s /usr/bin/systemctl.sh /usr/bin/systemctl
+
+# Install HestiaCP's web-UI composer dependencies. The installer doesn't run
+# this, so without it the panel PHP-fatals ("vendor/autoload.php not found") AND
+# the PHP helper that runs during service restarts fails  -  breaking both the
+# login UI and live domain changes. Deps land in web/inc/vendor and web/src/vendor.
+RUN /usr/local/hestia/bin/v-add-sys-dependencies \
+ && test -f /usr/local/hestia/web/inc/vendor/autoload.php \
+ && rm -rf /root/.composer/cache /tmp/* 2>/dev/null || true
 
 # Snapshot the installed defaults so the entrypoint can seed empty bind-mounted
 # data volumes on first run (data then persists under the host's ${APP_DATA_DIR}).

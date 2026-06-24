@@ -1,8 +1,8 @@
-# hestiacp-docker — non-privileged, multi-arch HestiaCP Docker image
+# hestiacp-docker  -  non-privileged, multi-arch HestiaCP Docker image
 
 A Docker image of [HestiaCP](https://hestiacp.com) (Hestia Control Panel) that
 runs **without `privileged` mode** and ships **multi-arch**
-(`linux/amd64` + `linux/arm64`) — the two prerequisites for putting HestiaCP in
+(`linux/amd64` + `linux/arm64`)  -  the two prerequisites for putting HestiaCP in
 the **official [Umbrel](https://umbrel.com) App Store** (which forbids
 privileged containers and requires prebuilt, multi-arch, digest-pinned images).
 
@@ -26,28 +26,28 @@ docker run -d --name hestia \
   ghcr.io/ptrinh/hestiacp:latest
 ```
 
-Open `https://localhost:8083` (self-signed cert → accept the warning).
+Open `https://localhost:8083` (self-signed cert -> accept the warning).
 
 ### Ports
 
 | Port | Purpose | Publish it when |
 |---|---|---|
-| `8083` | HestiaCP control panel (admin UI) | Always — it's how you manage the server |
+| `8083` | HestiaCP control panel (admin UI) | Always  -  it's how you manage the server |
 | `80` / `443` | HTTP/HTTPS for the **websites** HestiaCP hosts | You actually host sites and want visitors to reach them |
-| `25`, `587`, `465`, `993`, `53`, `21`, … | Mail / DNS / FTP | Only if you enable those services (off by default) |
+| `25`, `587`, `465`, `993`, `53`, `21`, ... | Mail / DNS / FTP | Only if you enable those services (off by default) |
 
 Just managing the panel? `-p 8083:8083` is enough. Hosting real sites? Add
 `-p 80:80 -p 443:443`.
 
 > **On Umbrel**, ports 80/443 are already used by umbrelOS itself, so the
 > Umbrel app publishes hosted sites on **alternate** host ports (e.g.
-> `9088:80`, `9448:443`) — see [ptrinh/umbrel-hestiacp](https://github.com/ptrinh/umbrel-hestiacp).
+> `9088:80`, `9448:443`)  -  see [ptrinh/umbrel-hestiacp](https://github.com/ptrinh/umbrel-hestiacp).
 
 ### SSH access (optional, off by default)
 
 For routine admin, prefer `docker exec -it hestiacp bash` (no open port). For
 hosting users' SSH/SFTP, add their keys **in the HestiaCP panel**
-(`v-add-user-ssh-key`) — there's also a built-in web terminal.
+(`v-add-user-ssh-key`)  -  there's also a built-in web terminal.
 
 If you specifically want to SSH into the container (e.g. scp / git-over-ssh),
 enable a **key-only** sshd by setting `ENABLE_SSH=true` and providing a public
@@ -86,16 +86,17 @@ docker exec hestia /usr/local/hestia/bin/v-change-user-password admin 'YOUR_PASS
 
 | HestiaCP normally needs | This image does instead |
 |---|---|
-| systemd as PID 1 | tini + a `systemctl` **shim** → SysV `service` + [docker-systemctl-replacement](https://github.com/gdraheim/docker-systemctl-replacement) |
+| systemd as PID 1 | tini + a `systemctl` **shim** -> SysV `service` + [docker-systemctl-replacement](https://github.com/gdraheim/docker-systemctl-replacement) |
 | iptables firewall (NET_ADMIN) | installed with `--iptables no` |
 | fail2ban (NET_ADMIN/NET_RAW) | installed with `--fail2ban no` |
 | kernel disk quota | installed with `--quota no` |
-| `privileged: true` + cgroup host | **none** — runs with the default cap set |
+| `privileged: true` + cgroup host | **none**  -  runs with the default cap set |
 
-Installed feature set: **nginx + Apache + php-fpm**, **MariaDB**, and the
-**HestiaCP API**. Mail (exim/dovecot), DNS (bind) and FTP are off by default to
-keep the image lean — flip the flags in the `Dockerfile` to enable them (none of
-them need privilege).
+Installed feature set: **nginx + php-fpm**, **MariaDB**, and the **HestiaCP
+API**. Apache is **off by default** (build with `--build-arg WITH_APACHE=yes`
+for .htaccess support; see hosting note below). Mail (exim/dovecot), DNS (bind)
+and FTP are off by default to keep the image lean - flip the flags in the
+`Dockerfile` to enable them (none of them need privilege).
 
 ### Honest trade-offs
 
@@ -114,23 +115,23 @@ them need privilege).
   ships 8.3) will fail to get a matching php-fpm pool and 503. Match the image's
   PHP version to your data, or rebuild the image with `--multiphp yes`.
 
-## Web hosting status (experimental)
+## Web hosting
 
-The **control panel** and config management are solid. Actually **serving hosted
-websites** from this container is **experimental**:
+The image is **nginx-only by default**, which is what makes in-container hosting
+work: adding a web domain serves correctly (HTTP 200), and sites persist and are
+rebuilt from the persisted data on every start (`v-rebuild-user`), including a
+changed container IP (auto-repointed on start). The container also auto-registers
+its current IP and creates the web-stack runtime dirs on start.
 
-- ✅ Sites you create **persist** and are rebuilt from the persisted data on
-  every start (`v-rebuild-user`) — served correctly in testing across container
-  recreation, including a changed container IP (auto-repointed on start).
-- ⚠️ **Live** domain changes (adding a domain on a running container) can be
-  unreliable: HestiaCP restarts the web/PHP services on every change, and those
-  restarts assume systemd. Without it, a restart can fail mid-operation and drop
-  nginx/php-fpm until the next container start re-runs the rebuild.
+Notes:
 
-The container auto-registers its current IP and creates the web-stack runtime
-dirs on start, so domains can be created — but for **production hosting**, run
-HestiaCP on a real VM. Making in-container live hosting fully reliable needs
-proper service supervision (e.g. s6-overlay) and is tracked separately.
+- On the very first domain you add, HestiaCP may print "Restart of nginx failed"
+  even though the site serves fine; subsequent adds are clean. (HestiaCP's
+  restart status check can race the non-systemd restart.)
+- **Apache** is opt-in (`--build-arg WITH_APACHE=yes`). With Apache, live domain
+  changes are NOT reliable in a container (Apache's restart fails and leaves the
+  site down until an app restart), so nginx-only is the recommended default.
+- For heavy production hosting, a dedicated VM is still the most robust option.
 
 ## Version & updates
 
@@ -164,17 +165,17 @@ docker exec -it hestia slim.sh --no-pma --dry-run
 | `--all` | `--tune --no-pma --no-filemanager --stats-off` |
 | `--dry-run` | print actions, change nothing |
 
-To build a nginx-only image (drop Apache entirely):
+To include Apache (adds .htaccess support; see the Web hosting note):
 
 ```bash
-docker build --build-arg WITH_APACHE=no -t hestiacp:nginx-only .
+docker build --build-arg WITH_APACHE=yes -t hestiacp:apache .
 ```
 
 ## Build it yourself
 
 ```bash
 docker build -t hestiacp:local .            # single-arch, local
-# multi-arch is done in CI (.github/workflows/build.yml: buildx + QEMU → GHCR)
+# multi-arch is done in CI (.github/workflows/build.yml: buildx + QEMU -> GHCR)
 ```
 
 Build args: `WITH_APACHE` (default `yes`), `HESTIA_HOSTNAME`, `HESTIA_EMAIL`,
@@ -187,7 +188,7 @@ Build args: `WITH_APACHE` (default `yes`), `HESTIA_HOSTNAME`, `HESTIA_EMAIL`,
 | `latest` | newest CI build (latest stable HestiaCP) |
 | `<git-sha>` | the exact commit that produced the image |
 
-Pin by digest (`ghcr.io/ptrinh/hestiacp@sha256:…`) for reproducibility.
+Pin by digest (`ghcr.io/ptrinh/hestiacp@sha256:...`) for reproducibility.
 
 ## Use on Umbrel
 
@@ -205,4 +206,4 @@ and [jhmaverick/hestiacp-docker](https://github.com/jhmaverick/hestiacp-docker).
 
 ## License
 
-Packaging is provided as-is. HestiaCP is © the HestiaCP project (GPL-3.0).
+Packaging is provided as-is. HestiaCP is (c) the HestiaCP project (GPL-3.0).

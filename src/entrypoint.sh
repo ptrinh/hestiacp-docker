@@ -47,7 +47,7 @@ if [ "${ENABLE_SSH:-false}" = "true" ] || [ -n "${SSH_AUTHORIZED_KEYS:-}" ]; the
     sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys
     chmod 600 /root/.ssh/authorized_keys
   else
-    echo "[entrypoint] WARN: SSH enabled but no authorized key provided — no one can log in"
+    echo "[entrypoint] WARN: SSH enabled but no authorized key provided  -  no one can log in"
   fi
   mkdir -p /etc/ssh/sshd_config.d
   printf 'PasswordAuthentication no\nPermitRootLogin prohibit-password\n' \
@@ -62,6 +62,8 @@ PHPFPM="$(ls /lib/systemd/system/ 2>/dev/null | grep -oE 'php[0-9.]+-fpm\.servic
 echo "[entrypoint] starting services (php-fpm unit: ${PHPFPM:-none})..."
 for svc in mariadb ${PHPFPM:-} nginx apache2 hestia; do
   [ -n "$svc" ] || continue
+  # apache2 is optional (nginx-only builds omit it)
+  [ "$svc" = apache2 ] && [ ! -f /lib/systemd/system/apache2.service ] && continue
   if /usr/bin/systemctl3.py start "$svc" >/dev/null 2>&1; then
     echo "[entrypoint] started $svc"
   else
@@ -72,13 +74,30 @@ done
 HEBIN=/usr/local/hestia/bin
 
 # Wait for the web stack to actually be listening before running HestiaCP
-# config commands — they restart nginx/apache and fail if those aren't ready.
+# config commands  -  they restart nginx/apache and fail if those aren't ready.
 echo "[entrypoint] waiting for web stack..."
 for _ in $(seq 1 60); do
   curl -k -s -o /dev/null https://localhost:8083/ 2>/dev/null \
     && (exec 3<>/dev/tcp/127.0.0.1/80) 2>/dev/null && break
   sleep 2
 done
+
+# --- set admin password (early, before the rebuild + before "ready") --------
+# Umbrel passes APP_PASSWORD into the container env (or set HESTIA_ADMIN_PASSWORD
+# directly). Doing this in the entrypoint  -  not a post-start hook  -  and BEFORE
+# the slower rebuild means it's applied before the app is reported ready.
+# Once-only, guarded by a sentinel in persisted data so a password you later
+# change in the panel is never overwritten.
+ADMIN_PW="${HESTIA_ADMIN_PASSWORD:-${APP_PASSWORD:-}}"
+PW_SENTINEL=/usr/local/hestia/data/.admin-password-set
+if [ -n "$ADMIN_PW" ] && [ ! -f "$PW_SENTINEL" ]; then
+  for _ in $(seq 1 30); do
+    if "$HEBIN/v-list-users" >/dev/null 2>&1 && "$HEBIN/v-change-user-password" admin "$ADMIN_PW"; then
+      touch "$PW_SENTINEL"; echo "[entrypoint] admin password initialised"; break
+    fi
+    sleep 2
+  done
+fi
 
 # --- ensure web-stack runtime dirs ----------------------------------------
 # /var/log is an ephemeral image layer (our build cleans it) and HestiaCP needs
@@ -115,7 +134,7 @@ fi
 # /etc is NOT a persisted volume (only Hestia data/conf, /home and mysql are).
 # The actual nginx/apache vhosts and php-fpm pool configs live under /etc and
 # are generated *from* that persisted data. So on every container (re)create the
-# /etc tree is the bare image layer with no user-domain configs — hosted sites
+# /etc tree is the bare image layer with no user-domain configs  -  hosted sites
 # would 503 (missing vhost AND missing php-fpm pool socket) until rebuilt.
 # Rebuild every user's configs from the persisted data, then reload the web
 # stack once. This is also what guarantees each domain's php-fpm pool socket
@@ -128,7 +147,9 @@ if [ -d /usr/local/hestia/data/users ]; then
       || echo "[entrypoint] WARN: rebuild failed for $u"
   done
   for s in ${PHPFPM:-} nginx apache2; do
-    [ -n "$s" ] && "$HEBIN/v-restart-service" "$s" >/dev/null 2>&1 || true
+    [ -n "$s" ] || continue
+    [ "$s" = apache2 ] && [ ! -f /lib/systemd/system/apache2.service ] && continue
+    "$HEBIN/v-restart-service" "$s" >/dev/null 2>&1 || true
   done
 fi
 

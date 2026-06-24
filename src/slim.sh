@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# slim.sh — OPT-IN leaning of a running HestiaCP container.
+# slim.sh  -  OPT-IN leaning of a running HestiaCP container.
 #
 # The default image keeps every feature. Run this when you want a smaller RAM/
 # CPU footprint and don't need certain components. Run it INSIDE the container:

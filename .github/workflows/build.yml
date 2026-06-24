@@ -31,7 +31,7 @@ jobs:
             runner: ubuntu-latest
             arch: amd64
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm   # native arm64 runner — no emulation
+            runner: ubuntu-24.04-arm   # native arm64 runner  -  no emulation
             arch: arm64
     steps:
       - uses: actions/checkout@v4
@@ -86,11 +86,14 @@ jobs:
           for f in /tmp/digests/*; do
             REFS="$REFS ${IMAGE}@$(cat "$f")"
           done
+          # build-<run_id> is unique per workflow run and never re-pushed, so a
+          # downstream `tag@sha256` pin to it won't drift when main is rebuilt.
           docker buildx imagetools create \
             -t ${IMAGE}:latest \
             -t ${IMAGE}:${{ github.sha }} \
+            -t ${IMAGE}:build-${{ github.run_id }} \
             $REFS
-          docker buildx imagetools inspect ${IMAGE}:latest
+          docker buildx imagetools inspect ${IMAGE}:build-${{ github.run_id }}
 
   smoke-test:
     needs: merge
@@ -99,17 +102,20 @@ jobs:
       - name: Run UNPRIVILEGED and verify the panel responds
         run: |
           set -e
-          # Note: no --privileged, no --cap-add — proves it runs with the
+          # Note: no --privileged, no --cap-add  -  proves it runs with the
           # default Docker capability set.
           docker run -d --name hestia -p 8083:8083 ${IMAGE}:latest
-          echo "waiting for HestiaCP to boot..."
+          echo "waiting for the login UI to render (not just respond)..."
           ok=0
           for i in $(seq 1 60); do
-            code=$(curl -k -s -o /dev/null -w "%{http_code}" https://localhost:8083/ || echo 000)
-            echo "[$i] https://localhost:8083 -> $code"
-            if [ "$code" = "200" ] || [ "$code" = "302" ]; then ok=1; break; fi
-            sleep 5
+            body=$(curl -k -s https://localhost:8083/login/ || true)
+            if echo "$body" | grep -qi 'Unable to load required libraries'; then
+              echo "[$i] login UI PHP-fatal (vendor deps missing)"; sleep 5; continue
+            fi
+            # the login form field is present only when the panel actually renders
+            if echo "$body" | grep -q 'name="user"'; then ok=1; break; fi
+            echo "[$i] login UI not ready yet"; sleep 5
           done
           echo "--- container logs (tail) ---"; docker logs --tail 40 hestia || true
-          if [ "$ok" != 1 ]; then echo "SMOKE TEST FAILED: panel never responded"; exit 1; fi
-          echo "SMOKE TEST PASSED: panel served unprivileged on 8083"
+          if [ "$ok" != 1 ]; then echo "SMOKE TEST FAILED: login UI did not render"; exit 1; fi
+          echo "SMOKE TEST PASSED: login UI rendered, unprivileged, on 8083"
