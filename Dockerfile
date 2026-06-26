@@ -106,6 +106,16 @@ RUN /usr/local/hestia/bin/v-add-sys-dependencies \
  && test -f /usr/local/hestia/web/inc/vendor/autoload.php \
  && rm -rf /root/.composer/cache /tmp/* 2>/dev/null || true
 
+# The panel's bundled php-fpm forces Secure + SameSite=Strict on its session
+# cookie. Behind Umbrel's app_proxy the browser reaches the panel over plain
+# HTTP, which drops a Secure cookie -> no session -> login bounces. Relax to a
+# non-Secure, SameSite=Lax cookie so the login flow works through the proxy.
+RUN sed -i 's/^php_admin_flag\[session.cookie_secure\] = on/php_admin_flag[session.cookie_secure] = off/' \
+      /usr/local/hestia/php/etc/php-fpm.conf \
+ && sed -i 's/^php_admin_value\[session.cookie_samesite\] = "Strict"/php_admin_value[session.cookie_samesite] = "Lax"/' \
+      /usr/local/hestia/php/etc/php-fpm.conf \
+ && grep -qE '^php_admin_flag\[session.cookie_secure\] = off' /usr/local/hestia/php/etc/php-fpm.conf
+
 # Snapshot the installed defaults so the entrypoint can seed empty bind-mounted
 # data volumes on first run (data then persists under the host's ${APP_DATA_DIR}).
 RUN mkdir -p /opt/seed \

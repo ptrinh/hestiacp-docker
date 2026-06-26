@@ -31,6 +31,14 @@ seed /home                  /opt/seed/home
 mkdir -p /backup
 chown -R mysql:mysql /var/lib/mysql 2>/dev/null || true
 
+# The panel PHP (hestia-php runs as hestiaweb) must be able to write its session
+# files; on the bind-mounted data dir the sessions dir comes back root-owned, so
+# fix it or logins fail with "session_start ... Permission denied".
+SESS=/usr/local/hestia/data/sessions
+mkdir -p "$SESS"
+chown hestiaweb:hestiaweb "$SESS" 2>/dev/null || chown admin:admin "$SESS" 2>/dev/null || true
+chmod 770 "$SESS" 2>/dev/null || true
+
 # --- optional SSH (opt-in, OFF by default) ---------------------------------
 # Started before the (slower) service stack so it's reachable quickly. Enabled
 # when ENABLE_SSH=true or SSH_AUTHORIZED_KEYS is provided. Key-only (no
