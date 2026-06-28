@@ -25,11 +25,13 @@ seed() {
   fi
 }
 seed /var/lib/mysql         /opt/seed/mysql
+seed /var/lib/postgresql    /opt/seed/postgresql
 seed /usr/local/hestia/data /opt/seed/hestia-data
 seed /usr/local/hestia/conf /opt/seed/hestia-conf
 seed /home                  /opt/seed/home
 mkdir -p /backup
 chown -R mysql:mysql /var/lib/mysql 2>/dev/null || true
+chown -R postgres:postgres /var/lib/postgresql 2>/dev/null || true
 
 # The panel PHP (hestia-php runs as hestiaweb) must be able to write its session
 # files; on the bind-mounted data dir the sessions dir comes back root-owned, so
@@ -68,10 +70,16 @@ fi
 PHPFPM="$(ls /lib/systemd/system/ 2>/dev/null | grep -oE 'php[0-9.]+-fpm\.service' | head -1 | sed 's/\.service$//')"
 
 echo "[entrypoint] starting services (php-fpm unit: ${PHPFPM:-none})..."
-for svc in mariadb ${PHPFPM:-} nginx apache2 hestia; do
+# Full stack. cron + data backends first, then web, then mail/DNS/FTP, then the
+# panel. Optional units (apache2, postgresql, mail, named, vsftpd) are skipped
+# cleanly if that feature wasn't built in.  bind9 ships its unit as named.service
+# on Debian (bind9.service is just an alias), so we start "named".
+for svc in cron mariadb postgresql ${PHPFPM:-} nginx apache2 exim4 dovecot named vsftpd hestia; do
   [ -n "$svc" ] || continue
-  # apache2 is optional (nginx-only builds omit it)
-  [ "$svc" = apache2 ] && [ ! -f /lib/systemd/system/apache2.service ] && continue
+  # skip units that aren't installed in this build (don't WARN on absent optionals)
+  if [ ! -f "/lib/systemd/system/$svc.service" ] && [ ! -f "/etc/systemd/system/$svc.service" ]; then
+    continue
+  fi
   if /usr/bin/systemctl3.py start "$svc" >/dev/null 2>&1; then
     echo "[entrypoint] started $svc"
   else

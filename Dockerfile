@@ -25,11 +25,9 @@ ARG HESTIA_HOSTNAME=hestia.umbrel.local
 ARG HESTIA_EMAIL=admin@hestiacp.local
 # Build-time placeholder password; reset at first run from APP_PASSWORD by the entrypoint.
 ARG HESTIA_PASSWORD=changeme
-# nginx-only by default: in a container, HestiaCP's live web restarts are only
-# reliable without the Apache backend (Apache's restart fails and leaves the
-# hosted site down). Set to "yes" to include Apache (gives .htaccess support,
-# but live domain changes then need an app restart to take effect).
-ARG WITH_APACHE=no
+# Full-panel build. Apache included by default; set to "no" for a leaner
+# nginx-only image (note: live domain changes are more reliable nginx-only).
+ARG WITH_APACHE=yes
 
 # --- image hygiene (no feature loss) ---------------------------------------
 # Strip docs/man/locales and stop apt pulling recommends/suggests. These apply
@@ -67,15 +65,24 @@ RUN curl -fsSL https://raw.githubusercontent.com/hestiacp/hestiacp/release/insta
       -o hst-install-debian.sh \
  && chmod +x hst-install-debian.sh \
  && php /usr/src/patch-hst-install.php /usr/src/hst-install-debian.sh \
+ # Neutralize the installer's service-start "check_result ... start failed" and
+ # default-domain checks. Without systemd these "fail" and abort the install
+ # partway, silently skipping the LATE steps (File Manager, cron jobs, DB-host
+ # registration, mail/DNS config). Making them non-fatal lets the install run to
+ # completion; we start the services ourselves at runtime.
+ && sed -i -E 's/^[[:space:]]*check_result \$\? "[^"]*start failed[^"]*"[[:space:]]*$/true/' hst-install-debian.sh \
+ && sed -i -E 's/^[[:space:]]*check_result \$\? "[^"]*(create|domain)[^"]*"[[:space:]]*$/true/' hst-install-debian.sh \
  && touch /var/log/auth.log
 
-# nginx + php-fpm + MariaDB + API. Apache optional via WITH_APACHE. The
-# privilege-requiring add-ons are off: firewall / fail2ban / quota.
+# Full panel: nginx (+ Apache) + PHP-FPM, MariaDB + PostgreSQL, mail
+# (Exim + Dovecot), DNS (Bind), FTP (vsftpd), File Manager + cron (added by the
+# installer's late steps, now that it runs to completion). Off: clamav /
+# spamassassin (heavy), and the privilege-requiring firewall / fail2ban / quota.
 RUN ./hst-install-debian.sh \
       --apache "$WITH_APACHE" --phpfpm yes --multiphp no \
-      --vsftpd no --proftpd no --named no \
-      --mysql yes --postgresql no \
-      --exim no --dovecot no --sieve no \
+      --vsftpd yes --proftpd no --named yes \
+      --mysql yes --postgresql yes \
+      --exim yes --dovecot yes --sieve no \
       --clamav no --spamassassin no \
       --iptables no --fail2ban no --quota no \
       --api yes --with-debs no \
@@ -88,6 +95,12 @@ RUN ./hst-install-debian.sh \
  # fail loudly if the installer aborted silently (e.g. bad hostname) instead of
  # shipping an empty image
  && test -x /usr/local/hestia/bin/v-list-users \
+ # the localhost DB hosts must have been registered (installer line ~2144/2149),
+ # else the panel's "Add Database" host dropdown is empty. v-add-database-host
+ # only writes these when the DB server is reachable, so a non-empty conf proves
+ # the install ran to completion with MariaDB/PostgreSQL up.
+ && test -s /usr/local/hestia/conf/mysql.conf \
+ && test -s /usr/local/hestia/conf/pgsql.conf \
  # cleanup: downloaded debs, apt caches, logs (same layer so bytes don't persist)
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/* /root/*.deb /usr/src/*.deb /var/cache/apt/archives/*.deb \
@@ -120,6 +133,7 @@ RUN sed -i 's/^php_admin_flag\[session.cookie_secure\] = on/php_admin_flag[sessi
 # data volumes on first run (data then persists under the host's ${APP_DATA_DIR}).
 RUN mkdir -p /opt/seed \
  && cp -a /var/lib/mysql          /opt/seed/mysql \
+ && cp -a /var/lib/postgresql     /opt/seed/postgresql \
  && cp -a /usr/local/hestia/data  /opt/seed/hestia-data \
  && cp -a /usr/local/hestia/conf  /opt/seed/hestia-conf \
  && cp -a /home                   /opt/seed/home
