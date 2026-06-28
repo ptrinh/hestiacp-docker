@@ -97,6 +97,16 @@ RUN ./hst-install-debian.sh \
  # Add-Database host dropdown) can't happen here - MariaDB/PostgreSQL aren't
  # running during `docker build` - so the entrypoint registers them at runtime.
  && test -x /usr/local/hestia/bin/v-list-users \
+ # Strip the build container's throwaway system IP and the default web domain
+ # the installer binds to it. At runtime the container gets a DIFFERENT IP, and
+ # a baked listen config for the old one makes apache/nginx fail to bind ("could
+ # not bind to address <buildip>"). The entrypoint registers the real IP fresh.
+ && : > /usr/local/hestia/data/users/admin/web.conf \
+ && rm -rf /home/admin/web/* \
+ && rm -f /etc/apache2/conf.d/domains/* /etc/nginx/conf.d/domains/* \
+ && for ip in $(ls /usr/local/hestia/data/ips/ 2>/dev/null); do \
+       rm -f "/etc/apache2/conf.d/$ip.conf" "/etc/nginx/conf.d/$ip.conf"; done \
+ && rm -f /usr/local/hestia/data/ips/* \
  # cleanup: downloaded debs, apt caches, logs (same layer so bytes don't persist)
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/* /root/*.deb /usr/src/*.deb /var/cache/apt/archives/*.deb \

@@ -193,22 +193,31 @@ mkdir -p /etc/apache2/conf.d/domains /etc/nginx/conf.d/domains \
 CUR_IP="$(hostname -i 2>/dev/null | awk '{print $1}')"
 if [ -n "$CUR_IP" ] && [ -d /usr/local/hestia/data ]; then
   mkdir -p /usr/local/hestia/data/ips
-  OLD_IP="$(ls /usr/local/hestia/data/ips/ 2>/dev/null | grep -vx "$CUR_IP" | head -1)"
   for _ in 1 2 3 4 5; do
     [ -e "/usr/local/hestia/data/ips/$CUR_IP" ] && break
     "$HEBIN/v-add-sys-ip" "$CUR_IP" 255.255.0.0 eth0 admin >/dev/null 2>&1
     [ -e "/usr/local/hestia/data/ips/$CUR_IP" ] && { echo "[entrypoint] registered system IP $CUR_IP"; break; }
     sleep 3
   done
-  if [ -n "$OLD_IP" ] && [ "$OLD_IP" != "$CUR_IP" ]; then
-    echo "[entrypoint] IP changed ($OLD_IP -> $CUR_IP); repointing web domains"
-    for u in $(ls /usr/local/hestia/data/users 2>/dev/null); do
-      for d in $("$HEBIN/v-list-web-domains" "$u" plain 2>/dev/null | awk '{print $1}'); do
-        "$HEBIN/v-change-web-domain-ip" "$u" "$d" "$CUR_IP" >/dev/null 2>&1
-      done
+  # Drop any stale (non-current) system IPs from a previous container
+  # incarnation. Their baked apache/nginx listen configs would make the web
+  # stack fail to bind ("could not bind to address <oldip>"). Remove the listen
+  # configs and the ips entry directly (v-delete-sys-ip deadlocks while a domain
+  # still references the IP), BEFORE repointing so the stack can come up on the
+  # current IP.
+  for ip in $(ls /usr/local/hestia/data/ips/ 2>/dev/null | grep -vx "$CUR_IP"); do
+    echo "[entrypoint] removing stale system IP $ip"
+    rm -f "/etc/apache2/conf.d/$ip.conf" "/etc/nginx/conf.d/$ip.conf" \
+          "/usr/local/hestia/data/ips/$ip"
+  done
+  # Repoint any web domains still bound to a non-current IP onto the current one.
+  for u in $(ls /usr/local/hestia/data/users 2>/dev/null); do
+    for d in $("$HEBIN/v-list-web-domains" "$u" plain 2>/dev/null | awk '{print $1}'); do
+      cur_d_ip="$("$HEBIN/v-list-web-domain" "$u" "$d" plain 2>/dev/null | awk 'NR==1{print $3}')"
+      [ -n "$cur_d_ip" ] && [ "$cur_d_ip" != "$CUR_IP" ] \
+        && "$HEBIN/v-change-web-domain-ip" "$u" "$d" "$CUR_IP" >/dev/null 2>&1
     done
-    "$HEBIN/v-delete-sys-ip" "$OLD_IP" >/dev/null 2>&1
-  fi
+  done
 fi
 
 # --- regenerate /etc configs from persisted Hestia data --------------------
