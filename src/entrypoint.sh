@@ -41,13 +41,18 @@ mkdir -p "$SESS"
 chown hestiaweb:hestiaweb "$SESS" 2>/dev/null || chown admin:admin "$SESS" 2>/dev/null || true
 chmod 770 "$SESS" 2>/dev/null || true
 
-# Recreate the log directories the build stripped (rm -rf /var/log/* keeps the
-# image small). nginx/apache/the panel refuse to START without their log dir
-# ("could not open error log file ... No such file or directory"), so this MUST
-# run before the service-start loop below, not after.
+# Recreate the runtime dirs the build stripped (rm -rf /var/log/* keeps the
+# image small) BEFORE starting any service: nginx/apache/the panel refuse to
+# start without their log dir ("could not open error log file ... No such file
+# or directory"), PostgreSQL can't start if it can't write its own log, and the
+# web vhost include dirs must exist or a domain restart fails.
 mkdir -p /var/log/nginx/domains /var/log/apache2/domains /var/log/hestia \
-         /var/log/php /var/log/mysql /var/log/postgresql /run/nginx 2>/dev/null || true
+         /var/log/php /var/log/mysql /var/log/postgresql /run/nginx \
+         /etc/apache2/conf.d/domains /etc/nginx/conf.d/domains 2>/dev/null || true
 chown -R www-data:www-data /var/log/nginx /var/log/apache2 2>/dev/null || true
+# pg_ctlcluster / mariadbd drop privileges and write their logs as these users.
+chown postgres:postgres /var/log/postgresql 2>/dev/null || true
+chown mysql:mysql       /var/log/mysql 2>/dev/null || true
 
 # --- optional SSH (opt-in, OFF by default) ---------------------------------
 # Started before the (slower) service stack so it's reachable quickly. Enabled
