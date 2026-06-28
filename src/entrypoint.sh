@@ -180,6 +180,23 @@ if [ -n "$ADMIN_PW" ] && [ ! -f "$PW_SENTINEL" ]; then
   done
 fi
 
+# --- relax CSRF origin/port heuristic for reverse-proxy use ----------------
+# Behind Umbrel's app_proxy the panel's external port (e.g. 8084) never matches
+# its internal SERVER_PORT (8083), so HestiaCP's origin/port CSRF check
+# (web/inc/prevent_csrf.php) always falls to the strictest case and blocks login
+# with "Potential CSRF use detected". Force POLICY_CSRF_STRICTNESS=0 (the
+# per-session form token still protects requests) - done every boot so existing
+# installs are fixed on restart, not only fresh ones.
+CF=/usr/local/hestia/conf/hestia.conf
+if [ -f "$CF" ] && ! grep -q "POLICY_CSRF_STRICTNESS='0'" "$CF"; then
+  if grep -q POLICY_CSRF_STRICTNESS "$CF"; then
+    sed -i "s/POLICY_CSRF_STRICTNESS=.*/POLICY_CSRF_STRICTNESS='0'/" "$CF"
+  else
+    echo "POLICY_CSRF_STRICTNESS='0'" >> "$CF"
+  fi
+  echo "[entrypoint] set POLICY_CSRF_STRICTNESS=0 (reverse-proxy CSRF heuristic)"
+fi
+
 # --- ensure web-stack runtime dirs ----------------------------------------
 # /var/log is an ephemeral image layer (our build cleans it) and HestiaCP needs
 # these to exist before it can register an IP or add a web domain.

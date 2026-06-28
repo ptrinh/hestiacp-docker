@@ -107,6 +107,13 @@ RUN ./hst-install-debian.sh \
  && for ip in $(ls /usr/local/hestia/data/ips/ 2>/dev/null); do \
        rm -f "/etc/apache2/conf.d/$ip.conf" "/etc/nginx/conf.d/$ip.conf"; done \
  && rm -f /usr/local/hestia/data/ips/* \
+ # Behind a reverse proxy the panel's external port never matches its internal
+ # SERVER_PORT, so HestiaCP's origin/port CSRF heuristic always blocks login
+ # with "Potential CSRF use detected". Relax it (the per-session form token
+ # still protects requests); HestiaCP documents this for proxied panels.
+ && if grep -q POLICY_CSRF_STRICTNESS /usr/local/hestia/conf/hestia.conf; then \
+       sed -i "s/POLICY_CSRF_STRICTNESS=.*/POLICY_CSRF_STRICTNESS='0'/" /usr/local/hestia/conf/hestia.conf; \
+    else echo "POLICY_CSRF_STRICTNESS='0'" >> /usr/local/hestia/conf/hestia.conf; fi \
  # cleanup: downloaded debs, apt caches, logs (same layer so bytes don't persist)
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/* /root/*.deb /usr/src/*.deb /var/cache/apt/archives/*.deb \
