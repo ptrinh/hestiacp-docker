@@ -144,6 +144,25 @@ RUN sed -i 's/^php_admin_flag\[session.cookie_secure\] = on/php_admin_flag[sessi
       /usr/local/hestia/php/etc/php-fpm.conf \
  && grep -qE '^php_admin_flag\[session.cookie_secure\] = off' /usr/local/hestia/php/etc/php-fpm.conf
 
+# Expose phpMyAdmin / phpPgAdmin through the panel (so they work via the single
+# Umbrel app_proxy port) and make their links work behind the proxy:
+#  - add the panel db-admin location blocks to the panel nginx server block;
+#  - add the panel nginx user (hestiaweb) to www-data so it can reach the system
+#    php pool socket (/run/php/www.sock) that runs phpMyAdmin;
+#  - rewrite the DB-list links to be root-relative (stock builds them as
+#    "//<host>/phpmyadmin/", and the host is parsed without the proxy port, so
+#    the link points at bare :80 / the wrong scheme and 404s).
+COPY src/panel-dbadmin.inc /etc/nginx/conf.d/panel-dbadmin.inc
+RUN PNG=/usr/local/hestia/nginx/conf/nginx.conf \
+ && grep -q panel-dbadmin.inc "$PNG" \
+    || sed -i "/server_name *_;/a\\        include /etc/nginx/conf.d/panel-dbadmin.inc;" "$PNG" \
+ && usermod -aG www-data hestiaweb \
+ && T=/usr/local/hestia/web/templates/pages/list_db.php \
+ && sed -i 's#"//" . $http_host . "/#"/#g' "$T" \
+ && sed -i 's#"https://".$http_host."/#"/#g' "$T" \
+ && grep -q 'panel-dbadmin.inc' "$PNG" \
+ && id hestiaweb | grep -q www-data
+
 # Snapshot the installed defaults so the entrypoint can seed empty bind-mounted
 # data volumes on first run (data then persists under the host's ${APP_DATA_DIR}).
 RUN mkdir -p /opt/seed \

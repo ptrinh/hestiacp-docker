@@ -47,12 +47,15 @@ chmod 770 "$SESS" 2>/dev/null || true
 # or directory"), PostgreSQL can't start if it can't write its own log, and the
 # web vhost include dirs must exist or a domain restart fails.
 mkdir -p /var/log/nginx/domains /var/log/apache2/domains /var/log/hestia \
-         /var/log/php /var/log/mysql /var/log/postgresql /run/nginx \
+         /var/log/php /var/log/mysql /var/log/postgresql /var/log/exim4 /run/nginx \
          /etc/apache2/conf.d/domains /etc/nginx/conf.d/domains 2>/dev/null || true
 chown -R www-data:www-data /var/log/nginx /var/log/apache2 2>/dev/null || true
-# pg_ctlcluster / mariadbd drop privileges and write their logs as these users.
-chown postgres:postgres /var/log/postgresql 2>/dev/null || true
-chown mysql:mysql       /var/log/mysql 2>/dev/null || true
+# pg_ctlcluster / mariadbd / exim drop privileges and write their logs as these
+# users; without a writable log dir the service fails to start (e.g. exim4 shows
+# as stopped in the panel).
+chown postgres:postgres        /var/log/postgresql 2>/dev/null || true
+chown mysql:mysql              /var/log/mysql 2>/dev/null || true
+chown Debian-exim:Debian-exim  /var/log/exim4 2>/dev/null || true
 
 # --- optional SSH (opt-in, OFF by default) ---------------------------------
 # Started before the (slower) service stack so it's reachable quickly. Enabled
