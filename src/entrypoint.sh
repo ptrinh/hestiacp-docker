@@ -95,7 +95,11 @@ echo "[entrypoint] starting services (php-fpm unit: ${PHPFPM:-none})..."
 # its unit search covers more dirs than /lib + /etc/systemd (e.g. the panel's
 # own hestia.service lives elsewhere), so a path probe wrongly skips real units.
 KNOWN_UNITS="$(/usr/bin/systemctl3.py list-unit-files 2>/dev/null | awk '{print $1}')"
-for svc in cron mariadb ${PHPFPM:-} nginx apache2 exim4 dovecot named vsftpd hestia; do
+# nginx/apache2 are started LATER, after the system IP is registered and the
+# vhost configs are rebuilt onto it - a container's IP changes across recreates,
+# and starting the web servers against the stale seeded config makes them fail
+# to bind ("could not bind to address <oldip>").
+for svc in cron mariadb ${PHPFPM:-} exim4 dovecot named vsftpd hestia; do
   [ -n "$svc" ] || continue
   # skip units this build doesn't include (don't WARN on absent optionals)
   printf '%s\n' "$KNOWN_UNITS" | grep -qx "$svc.service" || continue
@@ -157,12 +161,12 @@ if [ ! -s /usr/local/hestia/conf/pgsql.conf ] && command -v psql >/dev/null 2>&1
   fi
 fi
 
-# Wait for the web stack to actually be listening before running HestiaCP
-# config commands  -  they restart nginx/apache and fail if those aren't ready.
-echo "[entrypoint] waiting for web stack..."
+# Wait for the panel (hestia-nginx, port 8083) to be listening before running
+# HestiaCP config commands. nginx/apache (port 80) are started later, after the
+# IP fix below, so we only gate on the panel here.
+echo "[entrypoint] waiting for panel..."
 for _ in $(seq 1 60); do
-  curl -k -s -o /dev/null https://localhost:8083/ 2>/dev/null \
-    && (exec 3<>/dev/tcp/127.0.0.1/80) 2>/dev/null && break
+  curl -k -s -o /dev/null https://localhost:8083/ 2>/dev/null && break
   sleep 2
 done
 
@@ -256,10 +260,31 @@ if [ -d /usr/local/hestia/data/users ]; then
     "$HEBIN/v-rebuild-user" "$u" no >/dev/null 2>&1 \
       || echo "[entrypoint] WARN: rebuild failed for $u"
   done
-  for s in ${PHPFPM:-} nginx apache2; do
+
+  # Belt-and-suspenders: after a container IP change, v-rebuild-user can leave a
+  # generated vhost still listening on the previous IP (its repoint errors out on
+  # the missing mail domain / a failed restart), and nginx then refuses to bind
+  # the dead address. Rewrite any non-current listen IP found in the GENERATED
+  # vhost configs to the current IP - scoped to /home/*/conf and the per-user
+  # data only, never the shared includes (e.g. cloudflare.inc's real-ip ranges).
+  if [ -n "${CUR_IP:-}" ]; then
+    STALE_IPS="$(grep -rhoE 'listen[[:space:]]+([0-9]{1,3}\.){3}[0-9]{1,3}' \
+                   /home/*/conf 2>/dev/null \
+                 | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u | grep -vx "$CUR_IP")"
+    for OLDIP in $STALE_IPS; do
+      echo "[entrypoint] rewriting stale vhost IP $OLDIP -> $CUR_IP"
+      grep -rlF "$OLDIP" /home/*/conf /usr/local/hestia/data/users 2>/dev/null \
+        | xargs -r sed -i "s/$OLDIP/$CUR_IP/g"
+    done
+  fi
+
+  # Now start the web servers (held back from the early service loop until the
+  # configs are correct for the current IP), plus reload php-fpm for its pools.
+  for s in nginx apache2 ${PHPFPM:-}; do
     [ -n "$s" ] || continue
-    [ "$s" = apache2 ] && [ ! -f /lib/systemd/system/apache2.service ] && continue
-    "$HEBIN/v-restart-service" "$s" >/dev/null 2>&1 || true
+    printf '%s\n' "$KNOWN_UNITS" | grep -qx "$s.service" || continue
+    /usr/bin/systemctl3.py restart "$s" >/dev/null 2>&1 \
+      || /usr/bin/systemctl3.py start "$s" >/dev/null 2>&1 || true
   done
 fi
 
