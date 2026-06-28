@@ -93,20 +93,18 @@ RUN ./hst-install-debian.sh \
       --password "$HESTIA_PASSWORD" \
       --lang en --force --interactive no </dev/null \
  # fail loudly if the installer aborted silently (e.g. bad hostname) instead of
- # shipping an empty image
+ # shipping an empty image. NOTE: the localhost DB-host registration (the panel's
+ # Add-Database host dropdown) can't happen here - MariaDB/PostgreSQL aren't
+ # running during `docker build` - so the entrypoint registers them at runtime.
  && test -x /usr/local/hestia/bin/v-list-users \
- # the localhost DB hosts must have been registered (installer line ~2144/2149),
- # else the panel's "Add Database" host dropdown is empty. v-add-database-host
- # only writes these when the DB server is reachable, so a non-empty conf proves
- # the install ran to completion with MariaDB/PostgreSQL up.
- && test -s /usr/local/hestia/conf/mysql.conf \
- && test -s /usr/local/hestia/conf/pgsql.conf \
  # cleanup: downloaded debs, apt caches, logs (same layer so bytes don't persist)
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/* /root/*.deb /usr/src/*.deb /var/cache/apt/archives/*.deb \
            /var/log/* /tmp/* \
- # in a pinned container we patch by rebuilding, so stop in-place auto-update
- && (for cf in /var/spool/cron/crontabs/*; do [ -f "$cf" ] && sed -i '/v-update-sys-hestia-all/d' "$cf"; done) || true
+ # in a pinned container we patch by rebuilding, so stop in-place auto-update.
+ # (per-iteration `|| true` keeps this from masking a real failure in the chain
+ # above - the whole RUN still fails if any earlier `&&` step fails.)
+ && for cf in /var/spool/cron/crontabs/*; do [ -f "$cf" ] && sed -i '/v-update-sys-hestia-all/d' "$cf" || true; done
 
 # Re-assert the shim in case the installer's apt upgrades restored real systemd.
 RUN rm -f /usr/bin/systemctl && ln -s /usr/bin/systemctl.sh /usr/bin/systemctl

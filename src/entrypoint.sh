@@ -74,12 +74,15 @@ echo "[entrypoint] starting services (php-fpm unit: ${PHPFPM:-none})..."
 # panel. Optional units (apache2, postgresql, mail, named, vsftpd) are skipped
 # cleanly if that feature wasn't built in.  bind9 ships its unit as named.service
 # on Debian (bind9.service is just an alias), so we start "named".
-for svc in cron mariadb postgresql ${PHPFPM:-} nginx apache2 exim4 dovecot named vsftpd hestia; do
+#
+# Ask systemctl3.py which units actually exist rather than probing fixed paths:
+# its unit search covers more dirs than /lib + /etc/systemd (e.g. the panel's
+# own hestia.service lives elsewhere), so a path probe wrongly skips real units.
+KNOWN_UNITS="$(/usr/bin/systemctl3.py list-unit-files 2>/dev/null | awk '{print $1}')"
+for svc in cron mariadb ${PHPFPM:-} nginx apache2 exim4 dovecot named vsftpd hestia; do
   [ -n "$svc" ] || continue
-  # skip units that aren't installed in this build (don't WARN on absent optionals)
-  if [ ! -f "/lib/systemd/system/$svc.service" ] && [ ! -f "/etc/systemd/system/$svc.service" ]; then
-    continue
-  fi
+  # skip units this build doesn't include (don't WARN on absent optionals)
+  printf '%s\n' "$KNOWN_UNITS" | grep -qx "$svc.service" || continue
   if /usr/bin/systemctl3.py start "$svc" >/dev/null 2>&1; then
     echo "[entrypoint] started $svc"
   else
@@ -88,6 +91,55 @@ for svc in cron mariadb postgresql ${PHPFPM:-} nginx apache2 exim4 dovecot named
 done
 
 HEBIN=/usr/local/hestia/bin
+
+# --- PostgreSQL cluster + DB-host registration -----------------------------
+# Debian's postgresql.service is just a wrapper that, under systemd, pulls in
+# the versioned postgresql@<ver>-main unit; the systemctl shim can't, so the
+# real cluster never comes up. Start it directly with pg_ctlcluster (no systemd
+# needed). The cluster version is taken from the persisted data dir.
+if command -v pg_ctlcluster >/dev/null 2>&1; then
+  for PGVER in $(ls /var/lib/postgresql 2>/dev/null | grep -E '^[0-9]+$' | sort -n); do
+    if [ -d "/etc/postgresql/$PGVER/main" ]; then
+      pg_ctlcluster "$PGVER" main start >/dev/null 2>&1 \
+        && echo "[entrypoint] started postgresql $PGVER" \
+        || echo "[entrypoint] WARN: postgresql $PGVER start failed (continuing)"
+    fi
+  done
+fi
+
+# The installer registers the localhost MariaDB/PostgreSQL "database hosts"
+# (what populates the panel's Add-Database host dropdown) by calling
+# v-add-database-host, but that only works when the DB server is reachable -
+# which it is NOT during `docker build` (no running services). So we (re)do it
+# here at runtime, once, when the servers are actually up. Idempotent: guarded
+# by the per-type conf the command writes, so a host you later edit is left be.
+
+# MariaDB: root credentials are in /root/.my.cnf (set by the installer).
+if [ ! -s /usr/local/hestia/conf/mysql.conf ]; then
+  MPASS="$(sed -n 's/^[[:space:]]*password[[:space:]]*=[[:space:]]*//p' /root/.my.cnf 2>/dev/null | head -1 | tr -d '"')"
+  for _ in $(seq 1 20); do mariadb -e 'SELECT 1' >/dev/null 2>&1 && break; sleep 2; done
+  if [ -n "$MPASS" ] && "$HEBIN/v-add-database-host" mysql localhost root "$MPASS" >/dev/null 2>&1; then
+    echo "[entrypoint] registered MariaDB database host"
+  else
+    echo "[entrypoint] WARN: MariaDB database host not registered"
+  fi
+fi
+
+# PostgreSQL: the install never set the postgres SQL password (server was down
+# at build), so set a fresh one now via local peer auth, then register the host
+# with that password (v-add-database-host writes it into pgsql.conf).
+if [ ! -s /usr/local/hestia/conf/pgsql.conf ] && command -v psql >/dev/null 2>&1 \
+   && [ -n "${PGVER:-}" ]; then
+  for _ in $(seq 1 20); do su -s /bin/sh postgres -c 'psql -tAc "SELECT 1"' >/dev/null 2>&1 && break; sleep 2; done
+  PPASS="$(tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 24)"
+  if [ -n "$PPASS" ] \
+     && su -s /bin/sh postgres -c "psql -c \"ALTER USER postgres PASSWORD '$PPASS'\"" >/dev/null 2>&1 \
+     && "$HEBIN/v-add-database-host" pgsql localhost postgres "$PPASS" >/dev/null 2>&1; then
+    echo "[entrypoint] registered PostgreSQL database host"
+  else
+    echo "[entrypoint] WARN: PostgreSQL database host not registered (continuing)"
+  fi
+fi
 
 # Wait for the web stack to actually be listening before running HestiaCP
 # config commands  -  they restart nginx/apache and fail if those aren't ready.
