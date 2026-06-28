@@ -57,30 +57,26 @@ chown postgres:postgres        /var/log/postgresql 2>/dev/null || true
 chown mysql:mysql              /var/log/mysql 2>/dev/null || true
 chown Debian-exim:Debian-exim  /var/log/exim4 2>/dev/null || true
 
-# --- optional SSH (opt-in, OFF by default) ---------------------------------
-# Started before the (slower) service stack so it's reachable quickly. Enabled
-# when ENABLE_SSH=true or SSH_AUTHORIZED_KEYS is provided. Key-only (no
-# password). Publish a host port for container :22, e.g. `-p 2222:22`. For
-# routine admin prefer `docker exec` instead.
-if [ "${ENABLE_SSH:-false}" = "true" ] || [ -n "${SSH_AUTHORIZED_KEYS:-}" ]; then
-  echo "[entrypoint] enabling sshd (key-only)"
-  mkdir -p /root/.ssh /run/sshd
-  chmod 700 /root/.ssh
-  if [ -n "${SSH_AUTHORIZED_KEYS:-}" ]; then
-    printf '%s\n' "$SSH_AUTHORIZED_KEYS" >> /root/.ssh/authorized_keys   # one key, or several newline-separated
-  fi
-  if [ -s /root/.ssh/authorized_keys ]; then   # a mounted authorized_keys is also honoured
-    sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys
-    chmod 600 /root/.ssh/authorized_keys
-  else
-    echo "[entrypoint] WARN: SSH enabled but no authorized key provided  -  no one can log in"
-  fi
-  mkdir -p /etc/ssh/sshd_config.d
-  printf 'PasswordAuthentication no\nPermitRootLogin prohibit-password\n' \
-    > /etc/ssh/sshd_config.d/99-hestia.conf
-  ssh-keygen -A >/dev/null 2>&1 || true   # host keys (regenerated each start unless /etc/ssh is persisted)
-  /usr/sbin/sshd && echo "[entrypoint] sshd listening on :22" || echo "[entrypoint] WARN: sshd failed to start"
+# --- sshd (required by the File Manager) -----------------------------------
+# HestiaCP's File Manager and SSH-access shells talk to the box over SFTP/SSH on
+# 127.0.0.1, so sshd must run for the File Manager to list files at all. It
+# listens on :22, but that port is NOT published by default, so it's only
+# reachable inside the container (and by the panel) unless you map it. Key-only,
+# no passwords. To allow EXTERNAL SSH: publish :22 (add `-p 2222:22` or a ports
+# entry) and add your key via the panel (per-user) or SSH_AUTHORIZED_KEYS (root).
+mkdir -p /run/sshd /etc/ssh/sshd_config.d
+printf 'PasswordAuthentication no\nPermitRootLogin prohibit-password\n' \
+  > /etc/ssh/sshd_config.d/99-hestia.conf
+if [ -n "${SSH_AUTHORIZED_KEYS:-}" ]; then
+  mkdir -p /root/.ssh; chmod 700 /root/.ssh
+  printf '%s\n' "$SSH_AUTHORIZED_KEYS" >> /root/.ssh/authorized_keys   # one key, or several newline-separated
+  sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys
+  chmod 600 /root/.ssh/authorized_keys
 fi
+ssh-keygen -A >/dev/null 2>&1 || true   # host keys (regenerated each start unless /etc/ssh is persisted)
+pkill -x sshd 2>/dev/null || true
+/usr/sbin/sshd && echo "[entrypoint] sshd up (File Manager / SFTP on :22)" \
+  || echo "[entrypoint] WARN: sshd failed to start (File Manager will be empty)"
 
 # Detect the installed PHP-FPM unit (version-agnostic, e.g. php8.3-fpm).
 PHPFPM="$(ls /lib/systemd/system/ 2>/dev/null | grep -oE 'php[0-9.]+-fpm\.service' | head -1 | sed 's/\.service$//')"

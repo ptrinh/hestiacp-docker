@@ -161,7 +161,15 @@ RUN PNG=/usr/local/hestia/nginx/conf/nginx.conf \
  && sed -i 's#"//" . $http_host . "/#"/#g' "$T" \
  && sed -i 's#"https://".$http_host."/#"/#g' "$T" \
  && grep -q 'panel-dbadmin.inc' "$PNG" \
- && id hestiaweb | grep -q www-data
+ && id hestiaweb | grep -q www-data \
+ # The File Manager (and "jailbash" SSH access) use HestiaCP's SFTP chroot jail,
+ # which bind-mounts each user's home into /srv/jail/<user>. Bind mounts need
+ # mount privileges this container doesn't have, so the jail is empty and the
+ # File Manager shows no files. Drop the ChrootDirectory line (keeping the
+ # "# Hestia SFTP Chroot" comment so v-add-sys-sftp-jail never re-adds it); SFTP
+ # then serves each user's real home (ForceCommand internal-sftp -d /home/%u).
+ && sed -i '/^[[:space:]]*ChrootDirectory \/srv\/jail\/%u/d' /etc/ssh/sshd_config \
+ && ! grep -qE '^[[:space:]]*ChrootDirectory /srv/jail' /etc/ssh/sshd_config
 
 # Snapshot the installed defaults so the entrypoint can seed empty bind-mounted
 # data volumes on first run (data then persists under the host's ${APP_DATA_DIR}).
