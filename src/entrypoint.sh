@@ -226,13 +226,19 @@ if [ -n "$CUR_IP" ] && [ -d /usr/local/hestia/data ]; then
     rm -f "/etc/apache2/conf.d/$ip.conf" "/etc/nginx/conf.d/$ip.conf" \
           "/usr/local/hestia/data/ips/$ip"
   done
-  # Repoint any web domains still bound to a non-current IP onto the current one.
-  for u in $(ls /usr/local/hestia/data/users 2>/dev/null); do
-    for d in $("$HEBIN/v-list-web-domains" "$u" plain 2>/dev/null | awk '{print $1}'); do
-      cur_d_ip="$("$HEBIN/v-list-web-domain" "$u" "$d" plain 2>/dev/null | awk 'NR==1{print $3}')"
-      [ -n "$cur_d_ip" ] && [ "$cur_d_ip" != "$CUR_IP" ] \
-        && "$HEBIN/v-change-web-domain-ip" "$u" "$d" "$CUR_IP" >/dev/null 2>&1
-    done
+  # Repoint persisted web domains bound to a previous container IP by editing
+  # Hestia's data files directly, BEFORE the rebuild below. The polite route
+  # doesn't work here: v-change-web-domain-ip refuses to move a domain off an
+  # IP that is no longer registered, and v-rebuild-user then SKIPS any domain
+  # whose IP isn't a system IP - so the domain's nginx/apache vhost never gets
+  # regenerated and the hosted site silently serves the default page.
+  STALE_IPS="$(grep -rhoE "IP='([0-9]{1,3}\.){3}[0-9]{1,3}'" \
+                 /usr/local/hestia/data/users/*/web.conf 2>/dev/null \
+               | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u | grep -vx "$CUR_IP")"
+  for OLDIP in $STALE_IPS; do
+    echo "[entrypoint] repointing web data from stale IP $OLDIP -> $CUR_IP"
+    grep -rlF "$OLDIP" /usr/local/hestia/data/users /home/*/conf 2>/dev/null \
+      | xargs -r sed -i "s/$OLDIP/$CUR_IP/g"
   done
 fi
 
@@ -251,6 +257,12 @@ if [ -d /usr/local/hestia/data/users ]; then
     echo "[entrypoint] rebuilding Hestia configs for: $u"
     "$HEBIN/v-rebuild-user" "$u" no >/dev/null 2>&1 \
       || echo "[entrypoint] WARN: rebuild failed for $u"
+    # v-rebuild-user only rebuilds web domains when it had to CREATE the
+    # system user (rebuild_user_conf gates on create_user=yes). "admin" is
+    # baked into the image's /etc/passwd, so admin-owned domains would never
+    # get their vhosts regenerated on a fresh container - rebuild explicitly.
+    "$HEBIN/v-rebuild-web-domains" "$u" no >/dev/null 2>&1 \
+      || echo "[entrypoint] WARN: web-domain rebuild failed for $u"
   done
 
   # Belt-and-suspenders: after a container IP change, v-rebuild-user can leave a
