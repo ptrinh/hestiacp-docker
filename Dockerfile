@@ -195,14 +195,20 @@ COPY src/entrypoint.sh /usr/src/entrypoint.sh
 COPY src/slim.sh /usr/local/bin/slim.sh
 RUN chmod +x /usr/src/entrypoint.sh /usr/local/bin/slim.sh
 
-# FTP passive mode: pin the data-connection range so it can be published as a
-# port range. pasv_address is left unset (the container IP is advertised);
-# set FTP_PASV_ADDRESS at runtime to advertise a reachable LAN/host IP -
-# most clients (FileZilla, lftp, curl --ftp-skip-pasv-ip) otherwise fall back
-# to the control-connection address automatically.
+# FTP fixes for an unprivileged container build:
+#  - Hestia chroots FTP users into the SFTP jail (/srv/jail/%u), which needs
+#    bind-mount privileges this container doesn't have - the jail is empty and
+#    every FTP CWD fails. Chroot to the real home instead (same fix as the
+#    File Manager's sshd jail).
+#  - The installer bakes pasv_address=<BUILD MACHINE'S public IP> into the
+#    config - meaningless (and leaky) in an image. Drop it; the container IP
+#    is advertised by default (pasv_promiscuous stays on), and the entrypoint
+#    re-adds pasv_address from FTP_PASV_ADDRESS at runtime if set. Hestia
+#    already pins the passive range to 12000-12100 (see EXPOSE).
 RUN if [ -f /etc/vsftpd.conf ]; then \
-      printf '%s\n' 'pasv_enable=YES' 'pasv_min_port=12000' 'pasv_max_port=12100' \
-        >> /etc/vsftpd.conf; \
+      sed -i 's|^local_root=/srv/jail/%u|local_root=/home/%u|; /^pasv_address=/d' /etc/vsftpd.conf \
+      && ! grep -q '^pasv_address=' /etc/vsftpd.conf \
+      && grep -q '^local_root=/home/%u' /etc/vsftpd.conf; \
     fi
 
 # panel, hosted sites (HTTP/HTTPS), SSH/SFTP (File Manager), mail

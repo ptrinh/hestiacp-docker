@@ -496,14 +496,16 @@ else
       --data-urlencode "v_quota=" \
       --data-urlencode "token=$tok"
   fi
-  # deliver a message over SMTP (we are the MX for the domain)
+  # deliver a message over SMTP (we are the MX for the domain). Exim verifies
+  # that the SENDER's domain is routable, so it must be a real domain.
+  MAIL_SENDER="${MAIL_SENDER:-ext@gmail.com}"
   MARK="e2e-mail-$$-$(date +%s)"
-  printf 'From: ext@example.org\nTo: e2e@%s\nSubject: %s\n\ntest body\n' \
-    "$TEST_DOMAIN" "$MARK" > "$TMPD/msg.txt"
+  printf 'From: %s\nTo: e2e@%s\nSubject: %s\n\ntest body\n' \
+    "$MAIL_SENDER" "$TEST_DOMAIN" "$MARK" > "$TMPD/msg.txt"
   smtpok=0
   for _ in $(seq 1 6); do
     curl -s --max-time 20 "smtp://$SVC_HOST:$SMTP_PORT" \
-      --mail-from "ext@example.org" --mail-rcpt "e2e@$TEST_DOMAIN" \
+      --mail-from "$MAIL_SENDER" --mail-rcpt "e2e@$TEST_DOMAIN" \
       -T "$TMPD/msg.txt" && { smtpok=1; break; }
     sleep 10
   done

@@ -29,7 +29,7 @@ case "$verb" in
     # the panel's separate "hestia-nginx" is never touched.)
     for a in "${args[@]}"; do
       case "${a%.service}" in
-        nginx|apache2) pname="${a%.service}" ;;
+        nginx|apache2|exim4|dovecot|named|vsftpd) pname="${a%.service}" ;;
         *) continue ;;
       esac
       for _ in 1 2 3 4 5 6 7 8 9 10; do
