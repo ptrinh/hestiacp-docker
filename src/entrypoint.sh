@@ -275,9 +275,26 @@ if [ -d /usr/local/hestia/data/users ]; then
   for s in nginx apache2 ${PHPFPM:-}; do
     [ -n "$s" ] || continue
     printf '%s\n' "$KNOWN_UNITS" | grep -qx "$s.service" || continue
-    /usr/bin/systemctl3.py restart "$s" >/dev/null 2>&1 \
+    /usr/bin/systemctl.sh restart "$s" >/dev/null 2>&1 \
       || /usr/bin/systemctl3.py start "$s" >/dev/null 2>&1 || true
   done
+
+  # Verify nginx really serves the hosted-site port on the current IP - the
+  # rebuilds above fire their own service restarts, and a racing restart can
+  # leave nginx dead with its ports half-held (hosted sites then 000 while the
+  # panel looks fine). Kill any leftovers and start it fresh until it answers.
+  if [ -n "${CUR_IP:-}" ]; then
+    for _ in 1 2 3 4 5; do
+      if curl -s -o /dev/null --max-time 5 "http://$CUR_IP:80/"; then
+        echo "[entrypoint] web server answering on $CUR_IP:80"
+        break
+      fi
+      echo "[entrypoint] web server not answering on :80 yet, (re)starting nginx"
+      pkill -x nginx 2>/dev/null; sleep 2
+      /usr/bin/systemctl3.py start nginx >/dev/null 2>&1 || true
+      sleep 3
+    done
+  fi
 fi
 
 # Quick readiness check on the panel.
