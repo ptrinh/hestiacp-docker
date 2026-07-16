@@ -10,9 +10,13 @@
 # Version: the installer pulls HestiaCP's `release` branch, i.e. the latest
 # stable release at build time, so each build is automatically up to date.
 #
-# nginx-only by default (Apache opt-in via WITH_APACHE=yes). To slim a running
-# container later (remove phpMyAdmin/File Manager, tune RAM/CPU, disable stats)
-# run the bundled `slim.sh`.
+# Scope: web hosting (nginx + Apache + PHP-FPM), databases (MariaDB +
+# PostgreSQL, phpMyAdmin/phpPgAdmin), File Manager, cron and backups. Mail
+# (exim/dovecot), DNS (bind) and FTP (vsftpd) are NOT installed: in an
+# unprivileged single-port container their ports can't be served sensibly and
+# their state isn't persisted, so shipping them would only advertise features
+# users can't reach. To slim a running container further (remove phpMyAdmin/
+# File Manager, tune RAM/CPU, disable stats) run the bundled `slim.sh`.
 #
 # Approach adapted from Steveorevo/hestiacp-dockered, reworked for a small
 # Debian base, multi-arch CI builds, and a clean runtime entrypoint.
@@ -74,15 +78,16 @@ RUN curl -fsSL https://raw.githubusercontent.com/hestiacp/hestiacp/release/insta
  && sed -i -E 's/^[[:space:]]*check_result \$\? "[^"]*(create|domain)[^"]*"[[:space:]]*$/true/' hst-install-debian.sh \
  && touch /var/log/auth.log
 
-# Full panel: nginx (+ Apache) + PHP-FPM, MariaDB + PostgreSQL, mail
-# (Exim + Dovecot), DNS (Bind), FTP (vsftpd), File Manager + cron (added by the
-# installer's late steps, now that it runs to completion). Off: clamav /
-# spamassassin (heavy), and the privilege-requiring firewall / fail2ban / quota.
+# Web-hosting scope: nginx (+ Apache) + PHP-FPM, MariaDB + PostgreSQL, File
+# Manager + cron (added by the installer's late steps, now that it runs to
+# completion). Off: mail (exim/dovecot), DNS (bind), FTP (vsftpd) - see the
+# scope note in the header - plus clamav / spamassassin (heavy) and the
+# privilege-requiring firewall / fail2ban / quota.
 RUN ./hst-install-debian.sh \
       --apache "$WITH_APACHE" --phpfpm yes --multiphp no \
-      --vsftpd yes --proftpd no --named yes \
+      --vsftpd no --proftpd no --named no \
       --mysql yes --postgresql yes \
-      --exim yes --dovecot yes --sieve no \
+      --exim no --dovecot no --sieve no \
       --clamav no --spamassassin no \
       --iptables no --fail2ban no --quota no \
       --api yes --with-debs no \

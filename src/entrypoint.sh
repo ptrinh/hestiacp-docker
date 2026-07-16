@@ -47,15 +47,13 @@ chmod 770 "$SESS" 2>/dev/null || true
 # or directory"), PostgreSQL can't start if it can't write its own log, and the
 # web vhost include dirs must exist or a domain restart fails.
 mkdir -p /var/log/nginx/domains /var/log/apache2/domains /var/log/hestia \
-         /var/log/php /var/log/mysql /var/log/postgresql /var/log/exim4 /run/nginx \
+         /var/log/php /var/log/mysql /var/log/postgresql /run/nginx \
          /etc/apache2/conf.d/domains /etc/nginx/conf.d/domains 2>/dev/null || true
 chown -R www-data:www-data /var/log/nginx /var/log/apache2 2>/dev/null || true
-# pg_ctlcluster / mariadbd / exim drop privileges and write their logs as these
-# users; without a writable log dir the service fails to start (e.g. exim4 shows
-# as stopped in the panel).
+# pg_ctlcluster / mariadbd drop privileges and write their logs as these users;
+# without a writable log dir the service fails to start.
 chown postgres:postgres        /var/log/postgresql 2>/dev/null || true
 chown mysql:mysql              /var/log/mysql 2>/dev/null || true
-chown Debian-exim:Debian-exim  /var/log/exim4 2>/dev/null || true
 
 # --- sshd (required by the File Manager) -----------------------------------
 # HestiaCP's File Manager and SSH-access shells talk to the box over SFTP/SSH on
@@ -82,10 +80,8 @@ pkill -x sshd 2>/dev/null || true
 PHPFPM="$(ls /lib/systemd/system/ 2>/dev/null | grep -oE 'php[0-9.]+-fpm\.service' | head -1 | sed 's/\.service$//')"
 
 echo "[entrypoint] starting services (php-fpm unit: ${PHPFPM:-none})..."
-# Full stack. cron + data backends first, then web, then mail/DNS/FTP, then the
-# panel. Optional units (apache2, postgresql, mail, named, vsftpd) are skipped
-# cleanly if that feature wasn't built in.  bind9 ships its unit as named.service
-# on Debian (bind9.service is just an alias), so we start "named".
+# cron + data backends first, then the panel. Mail/DNS/FTP are not built into
+# this image (web-hosting scope); the unit check below skips anything absent.
 #
 # Ask systemctl3.py which units actually exist rather than probing fixed paths:
 # its unit search covers more dirs than /lib + /etc/systemd (e.g. the panel's
@@ -95,7 +91,7 @@ KNOWN_UNITS="$(/usr/bin/systemctl3.py list-unit-files 2>/dev/null | awk '{print 
 # vhost configs are rebuilt onto it - a container's IP changes across recreates,
 # and starting the web servers against the stale seeded config makes them fail
 # to bind ("could not bind to address <oldip>").
-for svc in cron mariadb ${PHPFPM:-} exim4 dovecot named vsftpd hestia; do
+for svc in cron mariadb ${PHPFPM:-} hestia; do
   [ -n "$svc" ] || continue
   # skip units this build doesn't include (don't WARN on absent optionals)
   printf '%s\n' "$KNOWN_UNITS" | grep -qx "$svc.service" || continue

@@ -92,11 +92,14 @@ docker exec hestia /usr/local/hestia/bin/v-change-user-password admin 'YOUR_PASS
 | kernel disk quota | installed with `--quota no` |
 | `privileged: true` + cgroup host | **none**  -  runs with the default cap set |
 
-Installed feature set: **nginx + php-fpm**, **MariaDB**, and the **HestiaCP
-API**. Apache is **off by default** (build with `--build-arg WITH_APACHE=yes`
-for .htaccess support; see hosting note below). Mail (exim/dovecot), DNS (bind)
-and FTP are off by default to keep the image lean - flip the flags in the
-`Dockerfile` to enable them (none of them need privilege).
+Installed feature set: **nginx + Apache + php-fpm**, **MariaDB + PostgreSQL**
+(with phpMyAdmin/phpPgAdmin through the panel), **File Manager**, **cron and
+backups**, and the **HestiaCP API**. Apache is on by default (build with
+`--build-arg WITH_APACHE=no` for a leaner nginx-only image). Mail
+(exim/dovecot), DNS (bind) and FTP are **not installed**: in a single-port
+container their ports can't be served sensibly and their state isn't
+persisted, so they'd be advertised but unreachable. Flip the flags in the
+`Dockerfile` if you self-build and can publish and persist them properly.
 
 ### Honest trade-offs
 
