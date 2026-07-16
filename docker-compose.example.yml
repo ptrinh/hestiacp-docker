@@ -22,19 +22,32 @@ services:
       - "80:80"        # hosted websites  -  HTTP   (drop if you only use the panel)
       - "443:443"      # hosted websites  -  HTTPS  (drop if you only use the panel)
       # - "2222:22"    # SSH (only if ENABLE_SSH=true above)
-      # Mail / DNS / FTP  -  uncomment only if you enable those services:
-      # - "25:25"
-      # - "587:587"
-      # - "465:465"
-      # - "993:993"
-      # - "53:53/tcp"
-      # - "53:53/udp"
-      # - "21:21"
+      # Mail (SMTP receive needs 25; ISPs often block OUTBOUND 25 - sending
+      # may need a smarthost). Drop any of these if you don't host mail:
+      - "25:25"        # SMTP (receiving mail from other servers)
+      - "587:587"      # submission (mail clients sending)
+      - "465:465"      # SMTPS
+      - "143:143"      # IMAP
+      - "993:993"      # IMAPS
+      - "110:110"      # POP3
+      - "995:995"      # POP3S
+      # DNS  -  only if you serve authoritative DNS for your zones:
+      - "53:53/tcp"
+      - "53:53/udp"
+      # FTP + passive data range (also set FTP_PASV_ADDRESS below):
+      - "21:21"
+      - "12000-12100:12000-12100"
+    # environment (see above):
+    #   FTP passive mode advertises the container IP by default; set your
+    #   host's LAN IP (or DNS name) so FTP clients can connect:
+    #   - FTP_PASV_ADDRESS=192.168.1.10
     volumes:
       - ./data/mysql:/var/lib/mysql              # MariaDB databases
+      - ./data/postgresql:/var/lib/postgresql    # PostgreSQL databases
       - ./data/hestia:/usr/local/hestia/data     # HestiaCP users / packages
       - ./data/hestia-conf:/usr/local/hestia/conf
-      - ./data/home:/home                        # user sites / mail
+      - ./data/home:/home                        # user sites / mailboxes / zones
+      - ./data/exim-spool:/var/spool/exim4       # mail queue
       - ./data/backup:/backup
     healthcheck:
       test: ["CMD-SHELL", "curl -k -sf https://localhost:8083/ >/dev/null || exit 1"]

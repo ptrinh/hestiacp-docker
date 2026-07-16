@@ -47,13 +47,33 @@ chmod 770 "$SESS" 2>/dev/null || true
 # or directory"), PostgreSQL can't start if it can't write its own log, and the
 # web vhost include dirs must exist or a domain restart fails.
 mkdir -p /var/log/nginx/domains /var/log/apache2/domains /var/log/hestia \
-         /var/log/php /var/log/mysql /var/log/postgresql /run/nginx \
+         /var/log/php /var/log/mysql /var/log/postgresql /var/log/exim4 /run/nginx \
          /etc/apache2/conf.d/domains /etc/nginx/conf.d/domains 2>/dev/null || true
 chown -R www-data:www-data /var/log/nginx /var/log/apache2 2>/dev/null || true
-# pg_ctlcluster / mariadbd drop privileges and write their logs as these users;
-# without a writable log dir the service fails to start.
+# pg_ctlcluster / mariadbd / exim drop privileges and write their logs as these
+# users; without a writable log dir the service fails to start (e.g. exim4
+# shows as stopped in the panel).
 chown postgres:postgres        /var/log/postgresql 2>/dev/null || true
 chown mysql:mysql              /var/log/mysql 2>/dev/null || true
+chown Debian-exim:Debian-exim  /var/log/exim4 2>/dev/null || true
+
+# The mail queue should be persisted (bind-mount /var/spool/exim4): recreate
+# exim's spool layout and ownership on the (possibly empty) mount, or exim
+# refuses to accept mail. Harmless when mail isn't built into the image.
+if id Debian-exim >/dev/null 2>&1; then
+  mkdir -p /var/spool/exim4/input /var/spool/exim4/msglog /var/spool/exim4/db 2>/dev/null || true
+  chown -R Debian-exim:Debian-exim /var/spool/exim4 2>/dev/null || true
+  chmod 750 /var/spool/exim4 2>/dev/null || true
+fi
+
+# FTP passive mode behind NAT: vsftpd advertises the container IP by default,
+# which LAN clients can't reach. If FTP_PASV_ADDRESS is set (host LAN IP or
+# hostname), advertise that instead.
+if [ -n "${FTP_PASV_ADDRESS:-}" ] && [ -f /etc/vsftpd.conf ]; then
+  sed -i '/^pasv_address=/d;/^pasv_addr_resolve=/d' /etc/vsftpd.conf
+  printf '%s\n' "pasv_address=$FTP_PASV_ADDRESS" 'pasv_addr_resolve=YES' >> /etc/vsftpd.conf
+  echo "[entrypoint] vsftpd passive address set to $FTP_PASV_ADDRESS"
+fi
 
 # --- sshd (required by the File Manager) -----------------------------------
 # HestiaCP's File Manager and SSH-access shells talk to the box over SFTP/SSH on
@@ -80,8 +100,9 @@ pkill -x sshd 2>/dev/null || true
 PHPFPM="$(ls /lib/systemd/system/ 2>/dev/null | grep -oE 'php[0-9.]+-fpm\.service' | head -1 | sed 's/\.service$//')"
 
 echo "[entrypoint] starting services (php-fpm unit: ${PHPFPM:-none})..."
-# cron + data backends first, then the panel. Mail/DNS/FTP are not built into
-# this image (web-hosting scope); the unit check below skips anything absent.
+# cron + data backends first, then mail/DNS/FTP, then the panel. The unit
+# check below skips anything not built into the image. bind9 ships its unit
+# as named.service on Debian (bind9.service is just an alias).
 #
 # Ask systemctl3.py which units actually exist rather than probing fixed paths:
 # its unit search covers more dirs than /lib + /etc/systemd (e.g. the panel's
@@ -91,7 +112,7 @@ KNOWN_UNITS="$(/usr/bin/systemctl3.py list-unit-files 2>/dev/null | awk '{print 
 # vhost configs are rebuilt onto it - a container's IP changes across recreates,
 # and starting the web servers against the stale seeded config makes them fail
 # to bind ("could not bind to address <oldip>").
-for svc in cron mariadb ${PHPFPM:-} hestia; do
+for svc in cron mariadb ${PHPFPM:-} exim4 dovecot named vsftpd hestia; do
   [ -n "$svc" ] || continue
   # skip units this build doesn't include (don't WARN on absent optionals)
   printf '%s\n' "$KNOWN_UNITS" | grep -qx "$svc.service" || continue
@@ -257,12 +278,29 @@ if [ -d /usr/local/hestia/data/users ]; then
     echo "[entrypoint] rebuilding Hestia configs for: $u"
     "$HEBIN/v-rebuild-user" "$u" no >/dev/null 2>&1 \
       || echo "[entrypoint] WARN: rebuild failed for $u"
-    # v-rebuild-user only rebuilds web domains when it had to CREATE the
-    # system user (rebuild_user_conf gates on create_user=yes). "admin" is
-    # baked into the image's /etc/passwd, so admin-owned domains would never
-    # get their vhosts regenerated on a fresh container - rebuild explicitly.
+    # v-rebuild-user only rebuilds domains when it had to CREATE the system
+    # user (rebuild_user_conf gates on create_user=yes). "admin" is baked
+    # into the image's /etc/passwd, so admin-owned web/mail/DNS state would
+    # never get its /etc configs regenerated on a fresh container - rebuild
+    # explicitly. Mail/DNS rebuilds are skipped cleanly when that subsystem
+    # isn't configured in hestia.conf.
     "$HEBIN/v-rebuild-web-domains" "$u" no >/dev/null 2>&1 \
       || echo "[entrypoint] WARN: web-domain rebuild failed for $u"
+    if grep -qE "^MAIL_SYSTEM='.+'" /usr/local/hestia/conf/hestia.conf 2>/dev/null; then
+      "$HEBIN/v-rebuild-mail-domains" "$u" >/dev/null 2>&1 \
+        || echo "[entrypoint] WARN: mail-domain rebuild failed for $u"
+    fi
+    if grep -qE "^DNS_SYSTEM='.+'" /usr/local/hestia/conf/hestia.conf 2>/dev/null; then
+      "$HEBIN/v-rebuild-dns-domains" "$u" no >/dev/null 2>&1 \
+        || echo "[entrypoint] WARN: dns-domain rebuild failed for $u"
+    fi
+  done
+
+  # Reload the mail/DNS daemons once after the rebuilds so regenerated /etc
+  # configs (DKIM, per-domain filters, zones) are actually in effect.
+  for s in exim4 dovecot named; do
+    printf '%s\n' "$KNOWN_UNITS" | grep -qx "$s.service" || continue
+    /usr/bin/systemctl.sh restart "$s" >/dev/null 2>&1 || true
   done
 
   # Belt-and-suspenders: after a container IP change, v-rebuild-user can leave a

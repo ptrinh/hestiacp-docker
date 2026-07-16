@@ -10,13 +10,19 @@
 # Version: the installer pulls HestiaCP's `release` branch, i.e. the latest
 # stable release at build time, so each build is automatically up to date.
 #
-# Scope: web hosting (nginx + Apache + PHP-FPM), databases (MariaDB +
-# PostgreSQL, phpMyAdmin/phpPgAdmin), File Manager, cron and backups. Mail
-# (exim/dovecot), DNS (bind) and FTP (vsftpd) are NOT installed: in an
-# unprivileged single-port container their ports can't be served sensibly and
-# their state isn't persisted, so shipping them would only advertise features
-# users can't reach. To slim a running container further (remove phpMyAdmin/
-# File Manager, tune RAM/CPU, disable stats) run the bundled `slim.sh`.
+# Scope: the full panel. Web hosting (nginx + Apache + PHP-FPM), databases
+# (MariaDB + PostgreSQL, phpMyAdmin/phpPgAdmin), mail (exim + dovecot), DNS
+# (bind), FTP (vsftpd, passive ports 12000-12100), File Manager, cron and
+# backups. Off: clamav/spamassassin (heavy) and the privilege-requiring
+# firewall / fail2ban / disk quota.
+#
+# To actually USE mail/DNS/FTP you must publish their ports (see EXPOSE at the
+# bottom / the compose example) and persist /var/spool/exim4 (the mail queue).
+# Mailboxes, DKIM keys, DNS zones and FTP accounts all live under /home and
+# /usr/local/hestia/data, which are the standard persisted volumes; the /etc
+# configs for them are regenerated from that data on every container start.
+# To slim a running container (remove phpMyAdmin/File Manager, tune RAM/CPU,
+# disable stats) run the bundled `slim.sh`.
 #
 # Approach adapted from Steveorevo/hestiacp-dockered, reworked for a small
 # Debian base, multi-arch CI builds, and a clean runtime entrypoint.
@@ -78,16 +84,15 @@ RUN curl -fsSL https://raw.githubusercontent.com/hestiacp/hestiacp/release/insta
  && sed -i -E 's/^[[:space:]]*check_result \$\? "[^"]*(create|domain)[^"]*"[[:space:]]*$/true/' hst-install-debian.sh \
  && touch /var/log/auth.log
 
-# Web-hosting scope: nginx (+ Apache) + PHP-FPM, MariaDB + PostgreSQL, File
-# Manager + cron (added by the installer's late steps, now that it runs to
-# completion). Off: mail (exim/dovecot), DNS (bind), FTP (vsftpd) - see the
-# scope note in the header - plus clamav / spamassassin (heavy) and the
-# privilege-requiring firewall / fail2ban / quota.
+# Full panel: nginx (+ Apache) + PHP-FPM, MariaDB + PostgreSQL, mail
+# (exim + dovecot), DNS (bind), FTP (vsftpd), File Manager + cron (added by
+# the installer's late steps, now that it runs to completion). Off: clamav /
+# spamassassin (heavy) and the privilege-requiring firewall / fail2ban / quota.
 RUN ./hst-install-debian.sh \
       --apache "$WITH_APACHE" --phpfpm yes --multiphp no \
-      --vsftpd no --proftpd no --named no \
+      --vsftpd yes --proftpd no --named yes \
       --mysql yes --postgresql yes \
-      --exim no --dovecot no --sieve no \
+      --exim yes --dovecot yes --sieve no \
       --clamav no --spamassassin no \
       --iptables no --fail2ban no --quota no \
       --api yes --with-debs no \
@@ -190,7 +195,19 @@ COPY src/entrypoint.sh /usr/src/entrypoint.sh
 COPY src/slim.sh /usr/local/bin/slim.sh
 RUN chmod +x /usr/src/entrypoint.sh /usr/local/bin/slim.sh
 
-EXPOSE 8083 80 443 22
+# FTP passive mode: pin the data-connection range so it can be published as a
+# port range. pasv_address is left unset (the container IP is advertised);
+# set FTP_PASV_ADDRESS at runtime to advertise a reachable LAN/host IP -
+# most clients (FileZilla, lftp, curl --ftp-skip-pasv-ip) otherwise fall back
+# to the control-connection address automatically.
+RUN if [ -f /etc/vsftpd.conf ]; then \
+      printf '%s\n' 'pasv_enable=YES' 'pasv_min_port=12000' 'pasv_max_port=12100' \
+        >> /etc/vsftpd.conf; \
+    fi
+
+# panel, hosted sites (HTTP/HTTPS), SSH/SFTP (File Manager), mail
+# (SMTP/submission/SMTPS, POP3/POP3S, IMAP/IMAPS), DNS, FTP (+ passive range)
+EXPOSE 8083 80 443 22 25 465 587 110 995 143 993 53 53/udp 21 12000-12100
 
 # tini as PID1: proper zombie reaping + signal forwarding for our service set.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/src/entrypoint.sh"]

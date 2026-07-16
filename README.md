@@ -34,7 +34,10 @@ Open `https://localhost:8083` (self-signed cert -> accept the warning).
 |---|---|---|
 | `8083` | HestiaCP control panel (admin UI) | Always  -  it's how you manage the server |
 | `80` / `443` | HTTP/HTTPS for the **websites** HestiaCP hosts | You actually host sites and want visitors to reach them |
-| `25`, `587`, `465`, `993`, `53`, `21`, ... | Mail / DNS / FTP | Only if you enable those services (off by default) |
+| `25` / `465` / `587` | Mail: SMTP (receive) / SMTPS / submission | You host mailboxes. Note: residential ISPs usually block OUTBOUND 25, so sending may need a smarthost |
+| `143` / `993`, `110` / `995` | Mail: IMAP(S), POP3(S) | Mail clients need to fetch mail |
+| `53` tcp+udp | DNS (bind) | You serve authoritative DNS for your zones |
+| `21` + `12000-12100` | FTP + passive data range | You want FTP instead of SFTP/File Manager. Set `FTP_PASV_ADDRESS=<host LAN IP>` so passive mode advertises a reachable address |
 
 Just managing the panel? `-p 8083:8083` is enough. Hosting real sites? Add
 `-p 80:80 -p 443:443`.
@@ -93,13 +96,17 @@ docker exec hestia /usr/local/hestia/bin/v-change-user-password admin 'YOUR_PASS
 | `privileged: true` + cgroup host | **none**  -  runs with the default cap set |
 
 Installed feature set: **nginx + Apache + php-fpm**, **MariaDB + PostgreSQL**
-(with phpMyAdmin/phpPgAdmin through the panel), **File Manager**, **cron and
-backups**, and the **HestiaCP API**. Apache is on by default (build with
-`--build-arg WITH_APACHE=no` for a leaner nginx-only image). Mail
-(exim/dovecot), DNS (bind) and FTP are **not installed**: in a single-port
-container their ports can't be served sensibly and their state isn't
-persisted, so they'd be advertised but unreachable. Flip the flags in the
-`Dockerfile` if you self-build and can publish and persist them properly.
+(with phpMyAdmin/phpPgAdmin through the panel), **mail (exim + dovecot)**,
+**DNS (bind)**, **FTP (vsftpd)**, **File Manager**, **cron and backups**, and
+the **HestiaCP API**. Apache is on by default (build with
+`--build-arg WITH_APACHE=no` for a leaner nginx-only image).
+
+Mail/DNS/FTP persistence: mailboxes, DKIM keys, DNS zones and FTP accounts
+live under the persisted `/home` + `/usr/local/hestia/data` volumes, and the
+`/etc` configs for them are regenerated from that data on every container
+start. The one extra volume you must add for mail is the queue:
+`-v ./data/exim-spool:/var/spool/exim4`. Publish the service ports from the
+table above; without them the daemons run but are unreachable from outside.
 
 ### Honest trade-offs
 
