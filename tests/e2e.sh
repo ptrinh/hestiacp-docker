@@ -120,6 +120,12 @@ site_php() {  # fetch the uploaded PHP probe through the hosted site
   curl -ks --max-time 10 -H "Host: $TEST_DOMAIN" "$SITE_URL/e2e-probe.php"
 }
 
+get_sys_ip() {  # the system IP Hestia currently offers (= the container IP)
+  "${CURL[@]}" "$PANEL_URL/add/web/?accept=true" | decode \
+    | grep -oE 'value="([0-9]{1,3}\.){3}[0-9]{1,3}"' \
+    | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1
+}
+
 echo "== 1. login page renders"
 body="$("${CURL[@]}" "$PANEL_URL/login/")"
 if echo "$body" | grep -qi 'Unable to load required libraries'; then
@@ -623,9 +629,34 @@ verify_recovery() {  # $1 = phase label
 
 if [ -n "$RESTART_CMD" ]; then
   echo "== 16. restart recovery"
-  echo "  restarting via: $RESTART_CMD"
+  # A container recreation can come back with the SAME IP (persisted Hestia
+  # IP record present, /etc configs gone - historically 502s) or a NEW IP
+  # (stale record repoint path). Both must recover. If the first restart
+  # lands on a new IP, restart once more - the freed IP is usually reused,
+  # exercising the same-IP path too.
+  ip_before="$(get_sys_ip)"
+  echo "  restarting via: $RESTART_CMD (container IP before: ${ip_before:-unknown})"
   if eval "$RESTART_CMD" >/dev/null 2>&1; then
     verify_recovery "restart"
+    login
+    ip_after="$(get_sys_ip)"
+    if [ -n "$ip_before" ] && [ "$ip_before" = "$ip_after" ]; then
+      ok "same-IP recreate path exercised (IP stayed $ip_after)"
+    else
+      echo "  (first restart changed IP: ${ip_before:-?} -> ${ip_after:-?}; restarting again to exercise the same-IP path)"
+      if eval "$RESTART_CMD" >/dev/null 2>&1; then
+        verify_recovery "second restart"
+        login
+        ip_after2="$(get_sys_ip)"
+        if [ -n "$ip_after" ] && [ "$ip_after" = "$ip_after2" ]; then
+          ok "same-IP recreate path exercised (IP stayed $ip_after2)"
+        else
+          skip "could not pin the same-IP path (IPs: ${ip_before:-?} -> ${ip_after:-?} -> ${ip_after2:-?})"
+        fi
+      else
+        fail "second restart command failed"
+      fi
+    fi
   else
     fail "restart command failed"
   fi

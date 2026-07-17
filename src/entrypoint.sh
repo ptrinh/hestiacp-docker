@@ -230,6 +230,23 @@ mkdir -p /etc/apache2/conf.d/domains /etc/nginx/conf.d/domains \
 CUR_IP="$(hostname -i 2>/dev/null | awk '{print $1}')"
 if [ -n "$CUR_IP" ] && [ -d /usr/local/hestia/data ]; then
   mkdir -p /usr/local/hestia/data/ips
+  # The IP record in persisted data can survive a container recreation while
+  # /etc does not. When the container comes back with the SAME IP, the record
+  # makes the add-loop below a no-op, so the per-IP nginx/apache listener
+  # configs (/etc/{nginx,apache2}/conf.d/<ip>.conf - apache's "Listen
+  # <ip>:8080" lives there) are never regenerated: apache stays on its
+  # defaults and every hosted site 502s behind the nginx proxy. If the
+  # configs are missing, drop the stale record so v-add-sys-ip recreates
+  # everything from templates.
+  if [ -e "/usr/local/hestia/data/ips/$CUR_IP" ]; then
+    NEED_REGEN=""
+    [ -d /etc/nginx ]   && [ ! -e "/etc/nginx/conf.d/$CUR_IP.conf" ]   && NEED_REGEN=1
+    [ -d /etc/apache2 ] && [ ! -e "/etc/apache2/conf.d/$CUR_IP.conf" ] && NEED_REGEN=1
+    if [ -n "$NEED_REGEN" ]; then
+      echo "[entrypoint] per-IP web configs missing for $CUR_IP - regenerating"
+      rm -f "/usr/local/hestia/data/ips/$CUR_IP"
+    fi
+  fi
   for _ in 1 2 3 4 5; do
     [ -e "/usr/local/hestia/data/ips/$CUR_IP" ] && break
     "$HEBIN/v-add-sys-ip" "$CUR_IP" 255.255.0.0 eth0 admin >/dev/null 2>&1
