@@ -121,9 +121,15 @@ site_php() {  # fetch the uploaded PHP probe through the hosted site
 }
 
 get_sys_ip() {  # the system IP Hestia currently offers (= the container IP)
-  "${CURL[@]}" "$PANEL_URL/add/web/?accept=true" | decode \
-    | grep -oE 'value="([0-9]{1,3}\.){3}[0-9]{1,3}"' \
-    | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1
+  local ip
+  for _ in 1 2 3 4; do
+    ip="$(fetch_auth "$PANEL_URL/add/web/?accept=true" \
+      | grep -oE 'value="([0-9]{1,3}\.){3}[0-9]{1,3}"' \
+      | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)"
+    [ -n "$ip" ] && break
+    sleep 5
+  done
+  printf '%s' "$ip"
 }
 
 echo "== 1. login page renders"
