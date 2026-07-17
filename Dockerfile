@@ -211,6 +211,17 @@ RUN if [ -f /etc/vsftpd.conf ]; then \
       && grep -q '^local_root=/home/%u' /etc/vsftpd.conf; \
     fi
 
+# Disable exim's default DNSBLs (zen.spamhaus.org, bl.spamcop.net) by emptying
+# /etc/exim4/dnsbl.conf. Docker/appliance hosts typically resolve through
+# public resolvers (1.1.1.1/8.8.8.8), and Spamhaus answers those with an
+# "open resolver" error code that exim treats as "listed" - so EVERY inbound
+# message gets 550-rejected. RBLs only work with a non-public resolver;
+# re-add zones (one per line) to /etc/exim4/dnsbl.conf if you run one. The
+# file must stay truly empty otherwise: exim joins its lines verbatim into
+# `dnslists` (readfile{...}{:}), so even comment lines would be queried as
+# RBL zones. (SpamAssassin/ClamAV are separate and simply not installed.)
+RUN if [ -f /etc/exim4/dnsbl.conf ]; then : > /etc/exim4/dnsbl.conf; fi
+
 # panel, hosted sites (HTTP/HTTPS), SSH/SFTP (File Manager), mail
 # (SMTP/submission/SMTPS, POP3/POP3S, IMAP/IMAPS), DNS, FTP (+ passive range)
 EXPOSE 8083 80 443 22 25 465 587 110 995 143 993 53 53/udp 21 12000-12100
